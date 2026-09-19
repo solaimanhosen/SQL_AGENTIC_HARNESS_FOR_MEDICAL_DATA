@@ -26,6 +26,7 @@ Backend/logs/
 # --- OS / editor ---
 .DS_Store
 .claude/settings.local.json
+.vscode/
 
 # --- Frontend (later phase) ---
 node_modules/

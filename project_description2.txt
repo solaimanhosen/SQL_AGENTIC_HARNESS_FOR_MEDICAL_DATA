@@ -1,0 +1,107 @@
+Data Agent Project
+
+
+An Agentic Harness for Interpreting Medical Data
+
+Build a chain-of-thought analytics agent that answers health and business questions
+over a synthetic medical database
+
+Project Abstract
+Telligen's work depends on turning large volumes of healthcare data into answers people
+can act on. Today that means an analyst writing queries, assembling tables, and
+interpreting results by hand. This project asks the team to build an agentic harness: an AI
+agent equipped with tools, skills, guardrails, and a reasoning loop that lets someone ask a
+question about medical data in plain language and receive a trustworthy, explained
+answer.
+The team will not start from an empty repository. A deliberate part of the work is surveying
+the mature open-source agentic and data-analytics harnesses that already exist, selecting
+one that is built to a production standard, and extending it for the medical analytics
+domain. All work uses publicly available synthetic healthcare data loaded into a local
+SQLite database, so no protected health information is ever involved and the team can
+share, reset, and publish freely.
+Telligen will provide healthcare context while teaching practical ways to use AI throughout
+development to produce production-level code.
+
+The Opportunity
+The goal is an agent that genuinely understands a dataset rather than one that guesses at
+SQL. A major focus is safe autonomy: the agent should do the routine analytical work that
+does not require a human in the loop, while showing its reasoning so a human can trust the
+result. The work combines AI engineering, data analytics, and software development
+around questions such as:
+• How can a clinician, analyst, or business user ask a question in plain language and get
+an answer that shows the reasoning, the query, and the evidence behind it?
+• How should the agent break a long, multi-part clinical question into a chain of verifiable
+steps without losing context along the way?
+• What reusable skills, rules, and grade tables would let the agent apply consistent
+definitions, thresholds, and scoring across many different questions?
+• How do we make the agent safe by construction, with read-only database access, no
+ability to write or alter data, and no data leaving the environment?
+• What visuals best let the agent explain its understanding of the data, so a reader can
+see what it found and why?
+
+Project Scope
+• Download publicly available synthetic healthcare data and load it into a local SQLite
+database with reproducible, documented scripts.
+• Survey existing open-source agentic and data-analytics harnesses, compare them
+against the project's needs, and select one to build on rather than starting from zero.
+• Build the harness so a natural-language question becomes a plan, a set of queries, an
+analysis, and an explained answer.
+• Give the agent explicit chain-of-thought reasoning for long problems, with intermediate
+results it can check and correct before continuing.
+• Author a library of reusable skills, rules, and grade tables that encode consistent clinical
+and business definitions.
+• Integrate Python analytics libraries so the agent can compute statistics, build cohorts,
+examine trends, and produce charts.
+• Generate self-contained HTML reports that combine narrative, tables, and visuals for a
+given question.
+• Demonstrate reasoning across several health problems, such as diabetes and heart
+disease, including questions that require many steps and several tables.
+• Harden and test the security posture: read-only access, least privilege, query validation,
+and prompt-injection resistance.
+• Deploy the finished solution, locally or in the cloud, and document how to run and
+extend it.
+• Work with the Telligen team on a weekly cadence to shape direction and review
+progress.
+
+Technical Direction
+• Extend a proven open-source agent harness instead of building agent infrastructure
+from scratch
+• Potential implementation stack: Python, SQLite for the local database, with a path to
+PostgreSQL in the cloud, and TypeScript if a web interface is built
+• Grant the agent read-only database access only, with no write, update, or schema
+privileges
+• Treat context as a first-class design problem: schema summaries, retrieval, memory, and
+compaction for long-running analyses
+• Use Python analytics and visualization libraries for computation and charting, with HTML
+as the reporting format
+• Use publicly available synthetic data only, with no protected health information at any
+stage
+• Automate routine analytical work that does not require a human in the loop, using AI
+where useful
+• Use AI-assisted engineering methods to plan, generate, review, test, and improve
+production-level code
+
+Expected Deliverables
+• Comparison of candidate open-source harnesses and a documented rationale for the
+one selected
+• A working agentic harness that answers natural-language questions over the synthetic
+medical database, deployed and runnable
+• Loaded synthetic database with reproducible data-loading scripts
+• Library of agent skills, rules, and grade tables, with documentation on adding more
+• Automatically generated HTML analytics reports with visuals that explain the agent's
+understanding of the data
+• An evaluation set of natural-language questions with measured accuracy and known
+limitations
+• Security review covering the threat model, read-only enforcement, and prompt-
+injection testing
+• Documented codebase and technical documentation
+• Final demonstration, report, poster, and presentation
+Collaboration with Telligen
+• Telligen-led introduction to healthcare data, analytics needs, and the kinds of questions
+the business asks
+• Ongoing guidance on domain definitions, grade tables, and what makes an answer
+trustworthy
+• Hands-on guidance for using AI to plan, generate, review, test, and improve
+production-level code
+• Review of the security posture and deployment approach
+• Weekly meetings, with the exact cadence finalized with the project team
