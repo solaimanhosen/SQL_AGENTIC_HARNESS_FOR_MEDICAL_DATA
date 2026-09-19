@@ -9,6 +9,7 @@ def test_defaults():
     assert s.effort == "high"
     assert s.max_tokens == 16_000
     assert s.db_path == BACKEND_DIR / "synthea.db"
+    assert s.csv_dir == BACKEND_DIR / "data" / "synthea"
     assert s.as_of == "latest"
     assert s.refusal_fallback is True
 
@@ -41,6 +42,11 @@ def test_relative_db_path_resolves_against_backend_dir_not_cwd(tmp_path, monkeyp
     monkeypatch.chdir(tmp_path)
     s = load_settings({"SQL_AGENT_DB_PATH": "data/other.db"})
     assert s.db_path == BACKEND_DIR / "data" / "other.db"
+
+
+def test_csv_dir_override(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert load_settings({"SQL_AGENT_CSV_DIR": "data/other"}).csv_dir == BACKEND_DIR / "data" / "other"
 
 
 def test_absolute_db_path_is_kept(tmp_path):

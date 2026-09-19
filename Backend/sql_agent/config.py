@@ -22,6 +22,7 @@ DEFAULT_MODEL = "claude-opus-5"
 DEFAULT_EFFORT = "high"
 DEFAULT_MAX_TOKENS = 16_000
 DEFAULT_DB_PATH = "synthea.db"
+DEFAULT_CSV_DIR = "data/synthea"
 DEFAULT_AS_OF = "latest"
 
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -39,6 +40,8 @@ class Settings:
     effort: str
     max_tokens: int
     db_path: Path
+    csv_dir: Path
+    """Folder holding the Synthea CSV files that the loader reads."""
     as_of: str
     """Anchor for relative time windows such as "last 12 months" (see docs/decisions/0002).
 
@@ -61,7 +64,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         model=env.get("SQL_AGENT_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL,
         effort=_parse_effort(env.get("SQL_AGENT_EFFORT", DEFAULT_EFFORT)),
         max_tokens=_parse_max_tokens(env.get("SQL_AGENT_MAX_TOKENS", str(DEFAULT_MAX_TOKENS))),
-        db_path=_resolve_db_path(env.get("SQL_AGENT_DB_PATH", DEFAULT_DB_PATH)),
+        db_path=_resolve_path(env.get("SQL_AGENT_DB_PATH", DEFAULT_DB_PATH)),
+        csv_dir=_resolve_path(env.get("SQL_AGENT_CSV_DIR", DEFAULT_CSV_DIR)),
         as_of=_parse_as_of(env.get("SQL_AGENT_AS_OF_DATE", DEFAULT_AS_OF)),
         refusal_fallback=_parse_bool("SQL_AGENT_REFUSAL_FALLBACK", env.get("SQL_AGENT_REFUSAL_FALLBACK", "true")),
     )
@@ -84,7 +88,7 @@ def _parse_max_tokens(raw: str) -> int:
     return value
 
 
-def _resolve_db_path(raw: str) -> Path:
+def _resolve_path(raw: str) -> Path:
     """Relative paths resolve against the Backend folder, so the CLI works from any directory."""
     path = Path(raw.strip()).expanduser()
     return path if path.is_absolute() else (BACKEND_DIR / path).resolve()

@@ -22,11 +22,19 @@ git-ignored. Then check the setup:
 .venv/bin/python -m sql_agent.check_setup --offline  # everything except the Claude call
 ```
 
-To rebuild the database from the CSV files in `data/synthea`:
+## Building the database
+
+`synthea.db` is generated, so it is not in git. Rebuild it from the CSV files in
+`data/synthea` at any time. The loader is the only component that writes to the database.
 
 ```bash
-.venv/bin/python load_csv_to_sqlite.py
+.venv/bin/python -m sql_agent.load_data
 ```
+
+It takes a few seconds, checks every table's row count against its CSV file, and creates the
+indexes the agent's joins rely on. The database is written to a temporary file and moved into
+place only after those checks pass, so a failed run never leaves a half-built database. The
+indexes roughly double the file size, to about 100 MB.
 
 ## Tests
 
@@ -47,6 +55,7 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `SQL_AGENT_EFFORT` | `high` | Reasoning effort: `low`, `medium`, `high`, `xhigh` or `max`. |
 | `SQL_AGENT_MAX_TOKENS` | `16000` | Output token limit per model call. |
 | `SQL_AGENT_DB_PATH` | `synthea.db` | Database path. Relative paths resolve against `Backend`. |
+| `SQL_AGENT_CSV_DIR` | `data/synthea` | Source CSV folder read by the loader. |
 | `SQL_AGENT_AS_OF_DATE` | `latest` | Anchor for "last N months": `latest`, `today` or `YYYY-MM-DD`. |
 | `SQL_AGENT_REFUSAL_FALLBACK` | `true` | Retry a declined request on a fallback model in the same call. |
 
@@ -57,5 +66,6 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/config.py` | Loads and validates settings. |
 | `sql_agent/llm.py` | Builds the Claude chat model. |
 | `sql_agent/check_setup.py` | Setup check script. |
+| `sql_agent/load_data.py` | Builds `synthea.db` from the CSV files. |
+| `data/synthea/` | Synthea source CSV files, committed so results stay reproducible. |
 | `tests/` | Unit tests. |
-| `load_csv_to_sqlite.py` | Builds `synthea.db` from the CSV files. |
