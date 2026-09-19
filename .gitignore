@@ -1,0 +1,31 @@
+# --- Secrets: never commit ---
+.env
+.env.*
+!.env.example
+api_key.txt
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Generated data (rebuild with the loader script) ---
+Backend/synthea.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# --- Agent run logs (added in Step 5) ---
+Backend/logs/
+
+# --- OS / editor ---
+.DS_Store
+.claude/settings.local.json
+
+# --- Frontend (later phase) ---
+node_modules/
