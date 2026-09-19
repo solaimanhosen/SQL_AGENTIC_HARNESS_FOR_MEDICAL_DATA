@@ -11,6 +11,8 @@ def test_defaults():
     assert s.db_path == BACKEND_DIR / "synthea.db"
     assert s.csv_dir == BACKEND_DIR / "data" / "synthea"
     assert s.as_of == "latest"
+    assert s.max_rows == 200
+    assert s.query_timeout_seconds == 15.0
     assert s.refusal_fallback is True
 
 
@@ -44,6 +46,11 @@ def test_relative_db_path_resolves_against_backend_dir_not_cwd(tmp_path, monkeyp
     assert s.db_path == BACKEND_DIR / "data" / "other.db"
 
 
+def test_query_limits_can_be_tuned():
+    s = load_settings({"SQL_AGENT_MAX_ROWS": "50", "SQL_AGENT_QUERY_TIMEOUT": "2.5"})
+    assert (s.max_rows, s.query_timeout_seconds) == (50, 2.5)
+
+
 def test_csv_dir_override(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert load_settings({"SQL_AGENT_CSV_DIR": "data/other"}).csv_dir == BACKEND_DIR / "data" / "other"
@@ -63,6 +70,12 @@ def test_absolute_db_path_is_kept(tmp_path):
         ("SQL_AGENT_MAX_TOKENS", "200000"),
         ("SQL_AGENT_AS_OF_DATE", "last year"),
         ("SQL_AGENT_AS_OF_DATE", "2026-13-01"),
+        ("SQL_AGENT_MAX_ROWS", "0"),
+        ("SQL_AGENT_MAX_ROWS", "20000"),
+        ("SQL_AGENT_MAX_ROWS", "many"),
+        ("SQL_AGENT_QUERY_TIMEOUT", "0"),
+        ("SQL_AGENT_QUERY_TIMEOUT", "600"),
+        ("SQL_AGENT_QUERY_TIMEOUT", "soon"),
         ("SQL_AGENT_REFUSAL_FALLBACK", "maybe"),
     ],
 )
