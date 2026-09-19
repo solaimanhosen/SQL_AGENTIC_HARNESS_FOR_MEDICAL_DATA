@@ -24,6 +24,8 @@ DEFAULT_MAX_TOKENS = 16_000
 DEFAULT_DB_PATH = "synthea.db"
 DEFAULT_CSV_DIR = "data/synthea"
 DEFAULT_AS_OF = "latest"
+DEFAULT_MAX_ROWS = 200
+DEFAULT_QUERY_TIMEOUT = 15.0
 
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MAX_OUTPUT_TOKENS = 128_000
@@ -48,6 +50,10 @@ class Settings:
     "latest" means the last encounter date in the data, "today" means the real
     current date, and a YYYY-MM-DD value pins an explicit date.
     """
+    max_rows: int
+    """Largest number of rows a single agent query may return."""
+    query_timeout_seconds: float
+    """Time limit for a single agent query, after which it is stopped."""
     refusal_fallback: bool
 
 
@@ -67,6 +73,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         db_path=_resolve_path(env.get("SQL_AGENT_DB_PATH", DEFAULT_DB_PATH)),
         csv_dir=_resolve_path(env.get("SQL_AGENT_CSV_DIR", DEFAULT_CSV_DIR)),
         as_of=_parse_as_of(env.get("SQL_AGENT_AS_OF_DATE", DEFAULT_AS_OF)),
+        max_rows=_parse_int("SQL_AGENT_MAX_ROWS", env.get("SQL_AGENT_MAX_ROWS", str(DEFAULT_MAX_ROWS)), 1, 10_000),
+        query_timeout_seconds=_parse_float("SQL_AGENT_QUERY_TIMEOUT", env.get("SQL_AGENT_QUERY_TIMEOUT", str(DEFAULT_QUERY_TIMEOUT)), 0.1, 300.0),
         refusal_fallback=_parse_bool("SQL_AGENT_REFUSAL_FALLBACK", env.get("SQL_AGENT_REFUSAL_FALLBACK", "true")),
     )
 
@@ -79,12 +87,26 @@ def _parse_effort(raw: str) -> str:
 
 
 def _parse_max_tokens(raw: str) -> int:
+    return _parse_int("SQL_AGENT_MAX_TOKENS", raw, 1, MAX_OUTPUT_TOKENS)
+
+
+def _parse_int(name: str, raw: str, low: int, high: int) -> int:
     try:
         value = int(raw)
     except ValueError:
-        raise ConfigError(f"SQL_AGENT_MAX_TOKENS must be an integer; got {raw!r}") from None
-    if not 1 <= value <= MAX_OUTPUT_TOKENS:
-        raise ConfigError(f"SQL_AGENT_MAX_TOKENS must be between 1 and {MAX_OUTPUT_TOKENS}; got {value}")
+        raise ConfigError(f"{name} must be an integer; got {raw!r}") from None
+    if not low <= value <= high:
+        raise ConfigError(f"{name} must be between {low} and {high}; got {value}")
+    return value
+
+
+def _parse_float(name: str, raw: str, low: float, high: float) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ConfigError(f"{name} must be a number; got {raw!r}") from None
+    if not low <= value <= high:
+        raise ConfigError(f"{name} must be between {low} and {high}; got {value}")
     return value
 
 

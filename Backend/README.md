@@ -45,6 +45,29 @@ indexes roughly double the file size, to about 100 MB.
 
 The tests make no network calls.
 
+## How queries are kept safe
+
+The agent never talks to the database directly. Every statement it writes passes through
+three independent layers, so no single mistake or clever prompt is enough to change data.
+
+1. **The connection is read-only.** The file is opened in read-only mode, so the process
+   cannot write to it even if everything else fails.
+2. **A SQLite authorizer runs inside the engine.** It rejects every action except reading,
+   and it refuses the identity columns listed below. Schema introspection runs on a
+   separate trusted connection with this agent's own fixed SQL.
+3. **Statements are validated before the database is opened.** Anything that is not a
+   single SELECT is rejected, including multiple statements hidden behind a comment.
+
+Two further limits protect against accidents rather than attacks. Results are capped, and
+the caller is told when rows were left out. Queries that run past the time limit are
+stopped, which catches accidental cartesian joins.
+
+Blocked columns are the direct identifiers in `patients`: social security number, driver's
+licence, passport, name parts, street address, birth place and exact coordinates. City,
+state, county, postal code, birth date, gender, race and ethnicity stay available, because
+analysts group by them and they do not identify a person on their own. The data is
+synthetic, so this is about proving the pattern rather than protecting real people.
+
 ## Configuration
 
 All settings are optional environment variables, read from the shell or from `Backend/.env`.
@@ -57,6 +80,8 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `SQL_AGENT_MAX_TOKENS` | `16000` | Output token limit per model call. |
 | `SQL_AGENT_DB_PATH` | `synthea.db` | Database path. Relative paths resolve against `Backend`. |
 | `SQL_AGENT_CSV_DIR` | `data/synthea` | Source CSV folder read by the loader. |
+| `SQL_AGENT_MAX_ROWS` | `200` | Largest number of rows one agent query may return. |
+| `SQL_AGENT_QUERY_TIMEOUT` | `15` | Seconds before a query is stopped. |
 | `SQL_AGENT_AS_OF_DATE` | `latest` | Anchor for "last N months": `latest`, `today` or `YYYY-MM-DD`. |
 | `SQL_AGENT_REFUSAL_FALLBACK` | `true` | Retry a declined request on a fallback model in the same call. |
 
@@ -67,6 +92,8 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/config.py` | Loads and validates settings. |
 | `sql_agent/llm.py` | Builds the Claude chat model. |
 | `sql_agent/check_setup.py` | Setup check script. |
+| `sql_agent/sql_guard.py` | Static validation of model-written SQL. |
+| `sql_agent/db.py` | Read-only database access with the authorizer and limits. |
 | `sql_agent/load_data.py` | Builds `synthea.db` from the CSV files. |
 | `data/synthea/` | Synthea source CSV files, committed so results stay reproducible. |
 | `tests/` | Unit tests. |
