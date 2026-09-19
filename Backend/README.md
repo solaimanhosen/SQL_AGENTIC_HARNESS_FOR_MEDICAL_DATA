@@ -25,7 +25,8 @@ git-ignored. Then check the setup:
 ## Building the database
 
 `synthea.db` is generated, so it is not in git. Rebuild it from the CSV files in
-`data/synthea` at any time. The loader is the only component that writes to the database.
+`data/synthea` at any time, from the `Backend` folder. The loader is the only component
+that writes to the database.
 
 ```bash
 .venv/bin/python -m sql_agent.load_data

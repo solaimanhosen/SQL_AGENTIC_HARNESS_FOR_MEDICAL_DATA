@@ -5,10 +5,13 @@ read-only. The database is built in a temporary file and moved into place only a
 table loads and its row count matches the CSV, so a failed run never leaves a half-built
 database behind.
 
-Run from any directory:
+Run it from the Backend folder, which is where the package is importable from:
 
     .venv/bin/python -m sql_agent.load_data
     .venv/bin/python -m sql_agent.load_data --csv-dir /path/to/csvs --db /path/to/out.db
+
+The CSV and database paths themselves come from settings and do not depend on the
+current directory, so the same command always reads and writes the same files.
 """
 
 from __future__ import annotations
