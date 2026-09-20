@@ -44,6 +44,25 @@ _ALLOWED_ACTIONS = frozenset({sqlite3.SQLITE_SELECT, sqlite3.SQLITE_FUNCTION, sq
 # How often SQLite checks whether the query has run out of time, in virtual machine steps.
 _PROGRESS_STEPS = 2_000
 
+# Engine limits for untrusted queries. Without the length limit a single expression such as
+# randomblob(200000000) allocates hundreds of megabytes before any row is returned.
+_ENGINE_LIMITS = {
+    "SQLITE_LIMIT_LENGTH": 1_000_000,  # bytes in one string or blob
+    "SQLITE_LIMIT_SQL_LENGTH": 100_000,  # characters in one statement
+    "SQLITE_LIMIT_EXPR_DEPTH": 200,
+    "SQLITE_LIMIT_COMPOUND_SELECT": 50,
+    "SQLITE_LIMIT_LIKE_PATTERN_LENGTH": 1_000,
+    "SQLITE_LIMIT_ATTACHED": 0,  # no attached databases, on top of the authorizer
+}
+
+
+def _apply_engine_limits(conn: sqlite3.Connection) -> None:
+    """Cap what one statement may allocate, nest or attach."""
+    for name, value in _ENGINE_LIMITS.items():
+        identifier = getattr(sqlite3, name, None)
+        if identifier is not None:
+            conn.setlimit(identifier, value)
+
 
 class QueryExecutionError(RuntimeError):
     """The database could not run the query, for example an unknown column or a syntax error."""
@@ -185,6 +204,7 @@ class ReadOnlyDatabase:
             if deadline is not None:
                 conn.set_progress_handler(lambda: int(time.monotonic() > deadline), _PROGRESS_STEPS)
             if not trusted:
+                _apply_engine_limits(conn)
                 conn.set_authorizer(self._authorize)
             yield conn
         finally:
@@ -194,6 +214,9 @@ class ReadOnlyDatabase:
         if action == sqlite3.SQLITE_READ:
             table = (arg1 or "").lower()
             column = (arg2 or "").lower()
+            # Internal tables hold the schema, which the agent gets from the catalog instead.
+            if table.startswith("sqlite_"):
+                return sqlite3.SQLITE_DENY
             if column and column in self.blocked_columns_for(table):
                 return sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK
@@ -202,6 +225,11 @@ class ReadOnlyDatabase:
         return sqlite3.SQLITE_DENY
 
     def _translate_denial(self, message: str) -> Exception:
+        if "prohibited" in message and "sqlite_" in message:
+            return UnsafeQueryError(
+                "The internal schema tables are not readable. Use describe_table to see what a "
+                "table holds."
+            )
         if "prohibited" in message:
             return BlockedColumnError(
                 f"{message.capitalize()}. Identity columns such as names, addresses and "

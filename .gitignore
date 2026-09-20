@@ -24,6 +24,9 @@ Backend/synthea.db
 Backend/logs/
 Backend/evals/results/
 
+# --- Local working notes, not shared ---
+CLAUDE.md
+
 # --- OS / editor ---
 .DS_Store
 .claude/settings.local.json

@@ -82,6 +82,18 @@ uses. Anything rejected here is rejected for the agent too.
 .venv/bin/python -m sql_agent.run_sql "DROP TABLE patients"
 ```
 
+## Security
+
+Three independent layers keep model-written SQL safe, described under "How queries are kept
+safe" below. The attack catalogue proves it, and runs without a model:
+
+```bash
+.venv/bin/python -m sql_agent.check_security
+```
+
+The threat model, the results and the remaining risks are in
+[docs/security.md](../docs/security.md).
+
 ## Evaluation
 
 The agent is scored against questions whose answers were verified by hand, in
@@ -162,6 +174,7 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/answer.py` | The shape of an answer, its rendering and its self-checks. |
 | `sql_agent/runlog.py` | Appends each run to the log. |
 | `sql_agent/evaluate.py` | Scores the agent against known answers. |
+| `sql_agent/check_security.py` | The attack catalogue and its runner. |
 | `evals/questions.yaml` | The evaluation set, with hand-verified answers. |
 | `sql_agent/tools.py` | The tools the agent can call, and the record of what they did. |
 | `sql_agent/prompts.py` | The agent's instructions. |

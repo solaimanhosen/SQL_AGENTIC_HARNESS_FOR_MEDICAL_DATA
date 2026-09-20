@@ -14,6 +14,11 @@ from sqlglot import exp
 
 DIALECT = "sqlite"
 
+# A statement longer than this is rejected before parsing. Real analytic SQL is far shorter,
+# and very long or deeply nested input is a way to exhaust the parser rather than to ask a
+# question.
+MAX_QUERY_CHARS = 20_000
+
 # A statement is allowed only when its root node is one of these.
 ALLOWED_ROOTS = (exp.Select, exp.Union, exp.Intersect, exp.Except, exp.Subquery)
 
@@ -62,11 +67,18 @@ def validate_query(sql: str) -> ValidatedQuery:
         text = text[:-1].strip()
     if not text:
         raise UnsafeQueryError("The query is empty.")
+    if len(text) > MAX_QUERY_CHARS:
+        raise UnsafeQueryError(
+            f"The query is {len(text):,} characters, over the {MAX_QUERY_CHARS:,} character limit. "
+            "Ask for less at a time."
+        )
 
     try:
         statements = [statement for statement in sqlglot.parse(text, dialect=DIALECT) if statement is not None]
     except sqlglot.ParseError as exc:
         raise UnsafeQueryError(f"The query is not valid SQLite SQL: {exc}") from None
+    except RecursionError:
+        raise UnsafeQueryError("The query is nested too deeply to parse. Simplify it.") from None
 
     if len(statements) != 1:
         raise UnsafeQueryError(
