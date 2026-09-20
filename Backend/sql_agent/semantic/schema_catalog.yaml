@@ -1,0 +1,314 @@
+# What the tables mean, how they join, and which values they hold.
+#
+# The agent sees a short overview of every table in its prompt and asks for the detail of a
+# table when it needs one. Keep descriptions factual and short. Identity columns blocked in
+# db.py must never appear here. A test checks every table and column named here against the
+# real database, so this file cannot drift away from the data without failing the suite.
+
+rules:
+  - Date columns are text. Some are full timestamps such as 2026-08-16T23:50:14Z and some
+    are plain dates such as 2026-08-14, so always compare date(column), never the raw text.
+  - Count DISTINCT patient when the question is about people. Most tables hold many rows
+    per person, so a plain COUNT(*) answers a different question.
+  - Codes are numbers, not text. Match them with code IN (...) rather than matching the
+    description with LIKE, which catches related but different conditions.
+  - Always say which definition and which time window an answer used.
+
+tables:
+  patients:
+    grain: One row per patient. The whole database covers 108 patients.
+    description: Demographics and lifetime cost totals for each patient.
+    primary_key: id
+    columns:
+      id: Patient identifier. Every other table refers to it.
+      birthdate: Date of birth. Compute age against the as-of date rather than today.
+      deathdate: Date of death, or null if the patient was alive at the end of the data.
+      gender: M or F.
+      race: white, black or asian in this data.
+      ethnicity: hispanic or nonhispanic.
+      marital: M married, S single, D divorced, W widowed, or null if unrecorded.
+      city: City of residence.
+      state: State of residence.
+      county: County of residence.
+      zip: Postal code.
+      fips: County FIPS code.
+      income: Annual income in dollars.
+      healthcare_expenses: Lifetime healthcare expenses in dollars.
+      healthcare_coverage: Lifetime amount covered by insurance in dollars.
+    notes:
+      - Names, street address, exact coordinates and identifiers such as the social security
+        number are blocked and cannot be selected. Group by city, county, zip, age or
+        demographics instead.
+      - 9 of the 108 patients have a death date.
+
+  encounters:
+    grain: One row per visit. 5,571 rows.
+    description: Every interaction with the health system, and the spine that other clinical tables hang from.
+    primary_key: id
+    columns:
+      id: Encounter identifier, referenced by conditions, medications, procedures and observations.
+      start: When the visit started.
+      stop: When the visit ended.
+      patient: Joins to patients.id.
+      organization: Joins to organizations.id.
+      provider: Joins to providers.id.
+      payer: Joins to payers.id.
+      encounterclass: The kind of visit. This is how an emergency visit is identified.
+      code: SNOMED code for the encounter type.
+      description: Human readable encounter type.
+      base_encounter_cost: Cost of the visit itself in dollars.
+      total_claim_cost: Total billed for the visit in dollars.
+      payer_coverage: Portion the payer covered in dollars.
+      reasoncode: SNOMED code for why the visit happened, often null.
+      reasondescription: Text form of the reason.
+    enums:
+      encounterclass:
+        - ambulatory
+        - wellness
+        - outpatient
+        - emergency
+        - urgentcare
+        - home
+        - inpatient
+        - snf
+        - virtual
+        - hospice
+    notes:
+      - The latest encounter starts on 2026-08-16, which is the as-of date for relative windows.
+      - Costs live here, so cost per visit questions do not need the claims tables.
+
+  conditions:
+    grain: One row per diagnosis recorded for a patient. 3,517 rows.
+    description: Diagnoses, using SNOMED codes.
+    columns:
+      start: When the condition was recorded.
+      stop: When it resolved, or null if still active.
+      patient: Joins to patients.id.
+      encounter: Joins to encounters.id.
+      code: SNOMED code. Use codes rather than description text to build cohorts.
+      description: Human readable diagnosis.
+      system: Coding system, always SNOMED here.
+    notes:
+      - There is no id column, and the same condition can appear more than once per patient.
+      - Matching description with LIKE '%diabet%' also catches prediabetes, which is a
+        different cohort. Use the code sets in the definitions.
+
+  medications:
+    grain: One row per medication order. 3,850 rows.
+    description: Prescriptions, with cost and the reason they were prescribed.
+    columns:
+      start: When the prescription started.
+      stop: When it ended, or null if ongoing.
+      patient: Joins to patients.id.
+      payer: Joins to payers.id.
+      encounter: Joins to encounters.id.
+      code: RxNorm code for the drug.
+      description: Drug name and strength.
+      base_cost: Cost per dispense in dollars.
+      payer_coverage: Amount the payer covered in dollars.
+      dispenses: Number of times it was dispensed.
+      totalcost: Total cost across dispenses in dollars.
+      reasoncode: SNOMED code for the condition being treated, often null.
+      reasondescription: Text form of the reason.
+    notes:
+      - reasoncode uses the same SNOMED codes as conditions, so it links a drug to a diagnosis.
+
+  observations:
+    grain: One row per measurement or answer. 68,648 rows.
+    description: Vital signs, laboratory results and survey answers, using LOINC codes.
+    columns:
+      date: When the measurement was taken.
+      patient: Joins to patients.id.
+      encounter: Joins to encounters.id, but see the note below.
+      category: laboratory, vital-signs, survey, social-history, exam, imaging, procedure or therapy.
+      code: LOINC code, stored as text. Hemoglobin A1c is 4548-4.
+      description: What was measured.
+      value: The result, stored as text even for numbers.
+      units: Unit of measure, such as mg/dL or mm[Hg].
+      type: numeric or text. Only cast value when type is numeric.
+    notes:
+      - value is text. Use CAST(value AS REAL) and filter type = 'numeric' before comparing.
+      - 3,060 rows are yearly quality of life metrics named QALY, DALY and QOLS. They have no
+        encounter and no category, so an inner join to encounters silently drops them.
+
+  procedures:
+    grain: One row per procedure performed. 15,884 rows.
+    description: Procedures with their cost and clinical reason, using SNOMED codes.
+    columns:
+      start: When the procedure started.
+      stop: When it ended.
+      patient: Joins to patients.id.
+      encounter: Joins to encounters.id, which is how procedures tie to a hospital visit.
+      code: SNOMED code.
+      description: Human readable procedure.
+      base_cost: Cost in dollars.
+      reasoncode: SNOMED code for why it was done, often null.
+      reasondescription: Text form of the reason.
+      system: Coding system, always SNOMED here.
+
+  claims:
+    grain: One row per claim. 9,421 rows.
+    description: Billing claims. Use these only for billing questions; per visit cost is already on encounters.
+    primary_key: id
+    columns:
+      id: Claim identifier, referenced by claims_transactions.claimid.
+      patientid: Joins to patients.id. Note the column name differs from other tables.
+      providerid: Joins to providers.id.
+      primarypatientinsuranceid: Joins to payers.id.
+      appointmentid: Joins to encounters.id.
+      servicedate: When the service was given.
+      diagnosis1: Primary SNOMED diagnosis code for the claim.
+      status1: Claim status against the primary payer, BILLED or CLOSED.
+      outstanding1: Amount still outstanding with the primary payer in dollars.
+    notes:
+      - Diagnosis columns run from diagnosis1 to diagnosis8 and are mostly null after the first.
+
+  claims_transactions:
+    grain: One row per line item on a claim. 85,047 rows and the largest table.
+    description: Charges, payments, adjustments and transfers that make up each claim.
+    columns:
+      id: Line item identifier.
+      claimid: Joins to claims.id.
+      patientid: Joins to patients.id.
+      type: Line item type, such as CHARGE or PAYMENT.
+      amount: Line amount in dollars.
+      payments: Amount paid in dollars.
+      adjustments: Adjustment amount in dollars.
+      outstanding: Amount outstanding in dollars.
+      fromdate: Start of the service period.
+      todate: End of the service period.
+      procedurecode: SNOMED procedure code for the line.
+      units: Number of units billed.
+
+  payers:
+    grain: One row per insurance payer. 10 rows.
+    description: Insurers, with totals they covered. Includes Medicare, Medicaid and commercial plans.
+    primary_key: id
+    columns:
+      id: Payer identifier.
+      name: Payer name, such as Medicare or Medicaid.
+      ownership: GOVERNMENT, PRIVATE or NO_INSURANCE.
+      amount_covered: Total covered in dollars.
+      amount_uncovered: Total not covered in dollars.
+      revenue: Total revenue in dollars.
+      covered_encounters: Number of encounters covered.
+      uncovered_encounters: Number of encounters not covered.
+      unique_customers: Number of distinct members.
+      member_months: Total member months.
+
+  payer_transitions:
+    grain: One row per period a patient spent with a payer. 3,815 rows.
+    description: Insurance coverage history over time.
+    columns:
+      patient: Joins to patients.id.
+      payer: Joins to payers.id.
+      start_date: Start of the coverage period.
+      end_date: End of the coverage period.
+      plan_ownership: Who owned the plan.
+      memberid: Member identifier with that payer.
+
+  organizations:
+    grain: One row per care organization. 278 rows.
+    description: Hospitals, clinics and other facilities.
+    primary_key: id
+    columns:
+      id: Organization identifier, joined from encounters.organization.
+      name: Organization name.
+      city: City.
+      state: State.
+      zip: Postal code.
+      revenue: Total revenue in dollars.
+      utilization: Number of encounters at the organization.
+
+  providers:
+    grain: One row per clinician. 278 rows.
+    description: Clinicians and their speciality.
+    primary_key: id
+    columns:
+      id: Provider identifier, joined from encounters.provider.
+      organization: Joins to organizations.id.
+      name: Provider name.
+      gender: Provider gender.
+      speciality: Clinical speciality. Note the spelling of this column.
+      city: City.
+      state: State.
+      encounters: Number of encounters handled.
+      procedures: Number of procedures performed.
+
+  immunizations:
+    grain: One row per vaccine given. 1,549 rows.
+    description: Vaccinations with their cost.
+    columns:
+      date: When the vaccine was given.
+      patient: Joins to patients.id.
+      encounter: Joins to encounters.id.
+      code: CVX vaccine code.
+      description: Vaccine name.
+      base_cost: Cost in dollars.
+
+  allergies:
+    grain: One row per recorded allergy. 105 rows.
+    description: Allergies with reaction and severity.
+    columns:
+      start: When the allergy was recorded.
+      stop: When it was resolved, always null in this data.
+      patient: Joins to patients.id.
+      encounter: Joins to encounters.id.
+      code: SNOMED code for the allergen.
+      description: Allergen name.
+      type: allergy or intolerance.
+      category: food, medication or environment.
+      description1: First reaction.
+      severity1: Severity of the first reaction.
+
+  careplans:
+    grain: One row per care plan. 349 rows.
+    description: Ongoing care plans, such as diabetes self management.
+    primary_key: id
+    columns:
+      id: Care plan identifier.
+      start: When the plan started.
+      stop: When it ended, or null if ongoing.
+      patient: Joins to patients.id.
+      encounter: Joins to encounters.id.
+      code: SNOMED code for the plan.
+      description: Plan name.
+      reasoncode: SNOMED code for why the plan exists.
+      reasondescription: Text form of the reason.
+    notes:
+      - A care plan is not a diagnosis. 36 patients have a diabetes self management plan
+        while only 8 have a diabetes diagnosis, because the plan also covers prediabetes.
+
+  devices:
+    grain: One row per device issued. 524 rows.
+    description: Medical devices with the period they were used.
+    columns:
+      start: When the device was issued.
+      stop: When its use ended.
+      patient: Joins to patients.id.
+      encounter: Joins to encounters.id.
+      code: SNOMED code for the device.
+      description: Device name.
+
+  imaging_studies:
+    grain: One row per imaging series. 478 rows.
+    description: Imaging studies with body site and modality.
+    columns:
+      id: Study identifier.
+      date: When the study was taken.
+      patient: Joins to patients.id.
+      encounter: Joins to encounters.id.
+      bodysite_description: Body site imaged.
+      modality_description: Imaging modality, such as ultrasound.
+      procedure_code: SNOMED code for the imaging procedure.
+
+  supplies:
+    grain: One row per supply item used. 2,225 rows.
+    description: Consumable supplies used during care.
+    columns:
+      date: When the supply was used.
+      patient: Joins to patients.id.
+      encounter: Joins to encounters.id.
+      code: SNOMED code for the supply.
+      description: Supply name.
+      quantity: Number of units used.

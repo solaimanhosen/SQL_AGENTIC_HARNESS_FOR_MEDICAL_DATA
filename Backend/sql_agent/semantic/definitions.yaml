@@ -1,0 +1,297 @@
+# Shared definitions of the terms people use when they ask questions.
+#
+# Every definition carries checks that run against the real data, so a definition that stops
+# matching the data fails the test suite instead of quietly changing answers. Run them with:
+#   .venv/bin/python -m sql_agent.check_semantics
+#
+# Placeholders: {as_of} becomes the as-of date from settings, and {sql} inside a check
+# becomes that definition's own sql, so a code list is written once.
+#
+# status: confirmed means Telligen has agreed the definition. assumed means we chose it and
+# it still needs review. The agent must state which definition it used in every answer.
+
+definitions:
+  diabetes:
+    label: Diabetic patient
+    kind: cohort
+    status: assumed
+    summary: Patients with a recorded diabetes diagnosis, excluding prediabetes.
+    applies_to: conditions
+    sql: |
+      SELECT DISTINCT patient FROM conditions
+      WHERE code IN (44054006, 127013003, 90781000119102, 157141000119108,
+                     368581000119106, 1551000119108, 427089005)
+    codes:
+      44054006: Diabetes mellitus type 2
+      127013003: Disorder of kidney due to diabetes mellitus
+      90781000119102: Microalbuminuria due to type 2 diabetes mellitus
+      157141000119108: Proteinuria due to type 2 diabetes mellitus
+      368581000119106: Neuropathy due to type 2 diabetes mellitus
+      1551000119108: Nonproliferative diabetic retinopathy due to type 2 diabetes mellitus
+      427089005: Diabetes mellitus due to cystic fibrosis
+    excludes:
+      714628002: Prediabetes is a risk state and not diabetes. It has its own definition.
+    notes:
+      - Complication codes are included because a complication of diabetes means the patient has diabetes.
+      - Matching description LIKE '%diabet%' instead returns 37 patients, more than four times
+        the correct cohort, because it sweeps in prediabetes.
+      - A diabetes self management care plan is not a diagnosis. 36 patients have the plan.
+    checks:
+      - description: Diabetic patients in the data
+        sql: SELECT COUNT(*) FROM ({sql})
+        equals: 8
+
+  prediabetes:
+    label: Prediabetic patient
+    kind: cohort
+    status: assumed
+    summary: Patients flagged as prediabetic. Report them separately from diabetic patients.
+    applies_to: conditions
+    sql: SELECT DISTINCT patient FROM conditions WHERE code = 714628002
+    codes:
+      714628002: Prediabetes
+    notes:
+      - 5 of these patients later also have a diabetes diagnosis, so the two cohorts overlap.
+    checks:
+      - description: Prediabetic patients in the data
+        sql: SELECT COUNT(*) FROM ({sql})
+        equals: 34
+
+  heart_disease:
+    label: Patient with heart disease
+    kind: cohort
+    status: assumed
+    summary: Patients with an active cardiac disorder, covering ischemic disease, heart attack, heart failure and atrial fibrillation.
+    applies_to: conditions
+    sql: |
+      SELECT DISTINCT patient FROM conditions
+      WHERE code IN (414545008, 22298006, 401314000, 401303003, 4557003, 88805009, 49436004)
+    codes:
+      414545008: Ischemic heart disease
+      22298006: Myocardial infarction
+      401314000: Acute non-ST segment elevation myocardial infarction
+      401303003: Acute ST segment elevation myocardial infarction
+      4557003: Preinfarction syndrome
+      88805009: Chronic congestive heart failure
+      49436004: Atrial fibrillation
+    excludes:
+      59621000: Essential hypertension is a risk factor, not heart disease. It has its own definition.
+      399211009: History of myocardial infarction records a past event. Use history_of_heart_attack for ever-had questions.
+    checks:
+      - description: Patients with heart disease
+        sql: SELECT COUNT(*) FROM ({sql})
+        equals: 17
+
+  history_of_heart_attack:
+    label: Patient who has ever had a heart attack
+    kind: cohort
+    status: assumed
+    summary: Patients with a current or past myocardial infarction, including the history code.
+    applies_to: conditions
+    sql: |
+      SELECT DISTINCT patient FROM conditions
+      WHERE code IN (22298006, 401314000, 401303003, 399211009)
+    codes:
+      22298006: Myocardial infarction
+      401314000: Acute non-ST segment elevation myocardial infarction
+      401303003: Acute ST segment elevation myocardial infarction
+      399211009: History of myocardial infarction
+    checks:
+      - description: Patients who have ever had a heart attack
+        sql: SELECT COUNT(*) FROM ({sql})
+        min: 7
+
+  hypertension:
+    label: Patient with hypertension
+    kind: cohort
+    status: assumed
+    summary: Patients diagnosed with essential hypertension.
+    applies_to: conditions
+    sql: SELECT DISTINCT patient FROM conditions WHERE code = 59621000
+    codes:
+      59621000: Essential hypertension
+    checks:
+      - description: Patients with hypertension
+        sql: SELECT COUNT(*) FROM ({sql})
+        equals: 20
+
+  emergency_visit:
+    label: Emergency department visit
+    kind: filter
+    status: assumed
+    summary: An encounter in the emergency department. This is what ER visit means.
+    applies_to: encounters
+    sql: encounterclass = 'emergency'
+    notes:
+      - Urgent care is a separate encounter class and is not counted here. Telligen still
+        needs to confirm whether their analysts expect urgent care to be included.
+    checks:
+      - description: Emergency encounters in the data
+        sql: SELECT COUNT(*) FROM encounters WHERE {sql}
+        equals: 270
+      - description: Patients with at least one emergency encounter
+        sql: SELECT COUNT(DISTINCT patient) FROM encounters WHERE {sql}
+        equals: 83
+
+  urgent_care_visit:
+    label: Urgent care visit
+    kind: filter
+    status: assumed
+    summary: An encounter at urgent care, which is separate from the emergency department.
+    applies_to: encounters
+    sql: encounterclass = 'urgentcare'
+    checks:
+      - description: Urgent care encounters
+        sql: SELECT COUNT(*) FROM encounters WHERE {sql}
+        equals: 195
+
+  inpatient_stay:
+    label: Inpatient stay
+    kind: filter
+    status: assumed
+    summary: An admission where the patient stayed in hospital.
+    applies_to: encounters
+    sql: encounterclass = 'inpatient'
+    checks:
+      - description: Inpatient encounters
+        sql: SELECT COUNT(*) FROM encounters WHERE {sql}
+        equals: 58
+
+  hospital_visit:
+    label: Hospital visit
+    kind: filter
+    status: assumed
+    summary: An emergency department visit or an inpatient admission.
+    applies_to: encounters
+    sql: encounterclass IN ('emergency', 'inpatient')
+    notes:
+      - Hospital visit is ambiguous in plain language. This definition excludes ambulatory,
+        wellness and outpatient encounters, which often happen at a hospital too. Say which
+        classes were counted, and offer the alternative if the question is about a trend.
+    checks:
+      - description: Hospital visits under this definition
+        sql: SELECT COUNT(*) FROM encounters WHERE {sql}
+        equals: 328
+
+  deceased:
+    label: Deceased patient
+    kind: filter
+    status: assumed
+    summary: A patient with a recorded date of death. A null death date means alive at the end of the data.
+    applies_to: patients
+    sql: deathdate IS NOT NULL
+    checks:
+      - description: Patients with a death date
+        sql: SELECT COUNT(*) FROM patients WHERE {sql}
+        equals: 9
+
+  active_condition:
+    label: Active condition
+    kind: filter
+    status: assumed
+    summary: A diagnosis that has not been resolved, meaning the stop date is empty.
+    applies_to: conditions
+    sql: stop IS NULL
+    checks:
+      - description: Unresolved condition rows
+        sql: SELECT COUNT(*) FROM conditions WHERE {sql}
+        min: 1
+
+  patient_age:
+    label: Patient age
+    kind: expression
+    status: assumed
+    summary: Age in whole years on the as-of date, not today.
+    applies_to: patients
+    sql: CAST((julianday('{as_of}') - julianday(birthdate)) / 365.25 AS INTEGER)
+    notes:
+      - Ages in this data run from 0 to 95 on the as-of date.
+    checks:
+      - description: Oldest patient age on the as-of date
+        sql: SELECT MAX({sql}) FROM patients
+        equals: 95
+
+  last_n_months:
+    label: Recent time window
+    kind: expression
+    status: assumed
+    summary: How to restrict any date column to the last N months, counted back from the as-of date.
+    applies_to: any table with a date column
+    sql: date(COLUMN) > date('{as_of}', '-N months') AND date(COLUMN) <= '{as_of}'
+    notes:
+      - Replace COLUMN with the date column and N with the number of months.
+      - The as-of date is the latest date in the data, not today, so answers stay stable.
+        See docs/decisions/0002-as-of-date.md.
+    checks:
+      - description: Emergency encounters in the last 12 months
+        sql: |
+          SELECT COUNT(*) FROM encounters
+          WHERE encounterclass = 'emergency'
+            AND date(start) > date('{as_of}', '-12 months') AND date(start) <= '{as_of}'
+        equals: 71
+
+  age_band:
+    label: Age band
+    kind: grade_table
+    status: assumed
+    summary: Standard age groups used whenever an answer is broken down by age.
+    applies_to: patients
+    sql: |
+      CASE
+        WHEN age < 18 THEN '0-17'
+        WHEN age < 35 THEN '18-34'
+        WHEN age < 50 THEN '35-49'
+        WHEN age < 65 THEN '50-64'
+        WHEN age < 80 THEN '65-79'
+        ELSE '80+'
+      END
+    notes:
+      - Compute age with the patient_age definition first, then band it.
+      - Use these bands for every age breakdown so answers can be compared with each other.
+    bands:
+      - {label: "0-17", rule: age < 18, patients: 21}
+      - {label: "18-34", rule: age >= 18 and age < 35, patients: 25}
+      - {label: "35-49", rule: age >= 35 and age < 50, patients: 31}
+      - {label: "50-64", rule: age >= 50 and age < 65, patients: 20}
+      - {label: "65-79", rule: age >= 65 and age < 80, patients: 8}
+      - {label: "80+", rule: age >= 80, patients: 3}
+    checks:
+      - description: Patients fall into exactly six age bands
+        sql: |
+          SELECT COUNT(*) FROM (
+            SELECT {sql} AS band
+            FROM (SELECT CAST((julianday('{as_of}') - julianday(birthdate)) / 365.25 AS INTEGER) AS age
+                  FROM patients)
+            GROUP BY band
+          )
+        equals: 6
+
+  hba1c_control:
+    label: Blood sugar control from hemoglobin A1c
+    kind: grade_table
+    status: assumed
+    summary: Clinical thresholds for the most recent hemoglobin A1c result, LOINC code 4548-4.
+    applies_to: observations
+    sql: |
+      CASE
+        WHEN CAST(value AS REAL) >= 6.5 THEN 'diabetes range'
+        WHEN CAST(value AS REAL) >= 5.7 THEN 'prediabetes range'
+        ELSE 'normal'
+      END
+    bands:
+      - {label: "normal", rule: below 5.7 percent}
+      - {label: "prediabetes range", rule: 5.7 to 6.4 percent}
+      - {label: "diabetes range", rule: 6.5 percent and above}
+    notes:
+      - Filter to code = '4548-4' and type = 'numeric' before casting the value.
+      - Laboratory results and diagnoses disagree in this data. Only 2 patients ever reach
+        the diabetes range while 8 carry a diabetes diagnosis, so say which basis was used.
+    checks:
+      - description: Patients with any A1c result
+        sql: SELECT COUNT(DISTINCT patient) FROM observations WHERE code = '4548-4' AND type = 'numeric'
+        equals: 39
+      - description: Patients reaching the diabetes range
+        sql: |
+          SELECT COUNT(DISTINCT patient) FROM observations
+          WHERE code = '4548-4' AND type = 'numeric' AND CAST(value AS REAL) >= 6.5
+        equals: 2
