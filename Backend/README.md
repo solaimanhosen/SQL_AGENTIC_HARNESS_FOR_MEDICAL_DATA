@@ -37,6 +37,27 @@ indexes the agent's joins rely on. The database is written to a temporary file a
 place only after those checks pass, so a failed run never leaves a half-built database. The
 indexes roughly double the file size, to about 100 MB.
 
+## The semantic layer
+
+Shared definitions such as which codes count as diabetes live in
+`sql_agent/semantic/`, described in [docs/semantic-layer.md](../docs/semantic-layer.md).
+Check them against the data, and see the text the agent will be given:
+
+```bash
+.venv/bin/python -m sql_agent.check_semantics
+.venv/bin/python -m sql_agent.check_semantics --show-prompt
+```
+
+## Running SQL by hand
+
+To try the guardrails or explore the data, run a statement through the same path the agent
+uses. Anything rejected here is rejected for the agent too.
+
+```bash
+.venv/bin/python -m sql_agent.run_sql "SELECT encounterclass, COUNT(*) FROM encounters GROUP BY 1"
+.venv/bin/python -m sql_agent.run_sql "DROP TABLE patients"
+```
+
 ## Tests
 
 ```bash
@@ -92,6 +113,10 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/config.py` | Loads and validates settings. |
 | `sql_agent/llm.py` | Builds the Claude chat model. |
 | `sql_agent/check_setup.py` | Setup check script. |
+| `sql_agent/semantic/` | Schema catalog and shared definitions, as YAML. |
+| `sql_agent/semantic.py` | Loads, renders and validates the semantic layer. |
+| `sql_agent/check_semantics.py` | Checks the definitions against the data. |
+| `sql_agent/run_sql.py` | Runs one statement through the guardrails. |
 | `sql_agent/sql_guard.py` | Static validation of model-written SQL. |
 | `sql_agent/db.py` | Read-only database access with the authorizer and limits. |
 | `sql_agent/load_data.py` | Builds `synthea.db` from the CSV files. |

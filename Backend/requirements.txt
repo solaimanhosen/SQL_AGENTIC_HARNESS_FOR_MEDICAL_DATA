@@ -11,6 +11,9 @@ python-dotenv>=1.2,<2
 # SQL parsing for the query guardrails
 sqlglot>=30,<31
 
+# The semantic layer files
+PyYAML>=6.0,<7
+
 # Data loading and analysis
 pandas>=2.0
 SQLAlchemy>=2.0,<3
