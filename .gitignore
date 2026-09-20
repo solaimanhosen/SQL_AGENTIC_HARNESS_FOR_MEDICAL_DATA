@@ -20,8 +20,9 @@ Backend/synthea.db
 *.db-wal
 *.db-shm
 
-# --- Agent run logs (added in Step 5) ---
+# --- Agent run logs and evaluation output ---
 Backend/logs/
+Backend/evals/results/
 
 # --- OS / editor ---
 .DS_Store

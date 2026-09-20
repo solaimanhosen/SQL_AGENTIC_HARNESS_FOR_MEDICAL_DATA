@@ -82,6 +82,20 @@ uses. Anything rejected here is rejected for the agent too.
 .venv/bin/python -m sql_agent.run_sql "DROP TABLE patients"
 ```
 
+## Evaluation
+
+The agent is scored against questions whose answers were verified by hand, in
+`evals/questions.yaml`. Each question carries the SQL that produces the right answer, so a
+change in the data is caught before the agent is asked anything.
+
+```bash
+.venv/bin/python -m sql_agent.evaluate --dry-run          # check the golden SQL only, free
+.venv/bin/python -m sql_agent.evaluate                    # score the agent, costs money
+.venv/bin/python -m sql_agent.evaluate --category safety  # just the safety questions
+```
+
+Results and known limitations are in [docs/evaluation.md](../docs/evaluation.md).
+
 ## Tests
 
 ```bash
@@ -147,6 +161,8 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/agent.py` | The agent loop, and the reusable core a web service will call. |
 | `sql_agent/answer.py` | The shape of an answer, its rendering and its self-checks. |
 | `sql_agent/runlog.py` | Appends each run to the log. |
+| `sql_agent/evaluate.py` | Scores the agent against known answers. |
+| `evals/questions.yaml` | The evaluation set, with hand-verified answers. |
 | `sql_agent/tools.py` | The tools the agent can call, and the record of what they did. |
 | `sql_agent/prompts.py` | The agent's instructions. |
 | `sql_agent/semantic/` | Schema catalog and shared definitions, as YAML. |
