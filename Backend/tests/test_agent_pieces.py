@@ -4,6 +4,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import main
 from sql_agent.agent import AgentResult, _final_text, _token_totals
+from sql_agent.answer import AnswerIssues, Finding, StructuredAnswer, TimeWindow
 from sql_agent.prompts import build_system_prompt
 from sql_agent.semantic import load_semantic_layer
 from sql_agent.tools import QueryRecord
@@ -49,8 +50,15 @@ def _result(**overrides):
     defaults = dict(
         question="How many?",
         answer="Eight patients.",
+        structured=StructuredAnswer(
+            headline="Eight patients.",
+            findings=[Finding(statement="Eight patients.", query_numbers=[1])],
+            definitions_used=["diabetes"],
+            time_window=TimeWindow(months=12),
+        ),
+        issues=AnswerIssues(),
         queries=(
-            QueryRecord(sql="SELECT 1", row_count=1, elapsed_ms=2.0),
+            QueryRecord(sql="SELECT 1", number=1, row_count=1, elapsed_ms=2.0),
             QueryRecord(sql="DROP TABLE x", error="UnsafeQueryError: nope"),
         ),
         as_of=AS_OF,
@@ -69,6 +77,7 @@ def test_cli_prints_the_answer_and_the_sql(capsys):
     assert "SELECT 1" in output
     assert "DROP TABLE x" not in output, "failed queries are counted, not presented as the source"
     assert "1 queries, 1 failed" in output
+    assert "Query 1." in output
 
 
 def test_cli_can_hide_the_sql(capsys):
@@ -83,3 +92,23 @@ def test_verbose_events_are_readable(capsys):
     main.print_event("sql_error", "boom")
     output = capsys.readouterr().out
     assert "running SQL" in output and "3 rows" in output and "failed: boom" in output
+
+
+def test_traceability_warnings_are_printed(capsys):
+    result = _result(
+        issues=AnswerIssues(
+            unknown_definitions=("made_up",),
+            missing_query_numbers=(9,),
+            unsupported_findings=("a claim with no query",),
+            window_not_in_sql="last 12 months is claimed but no query filters on those dates",
+        )
+    )
+    main.print_traceability(result)
+    output = capsys.readouterr().out
+    assert "made_up" in output and "9" in output and "a claim with no query" in output
+    assert "not backed by SQL" in output
+
+
+def test_no_warnings_when_the_answer_checks_out(capsys):
+    main.print_traceability(_result())
+    assert capsys.readouterr().out == ""

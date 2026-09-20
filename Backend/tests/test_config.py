@@ -12,6 +12,7 @@ def test_defaults():
     assert s.csv_dir == BACKEND_DIR / "data" / "synthea"
     assert s.as_of == "latest"
     assert s.max_rows == 200
+    assert s.log_path == BACKEND_DIR / "logs" / "runs.jsonl"
     assert s.query_timeout_seconds == 15.0
     assert s.refusal_fallback is True
 
@@ -44,6 +45,12 @@ def test_relative_db_path_resolves_against_backend_dir_not_cwd(tmp_path, monkeyp
     monkeypatch.chdir(tmp_path)
     s = load_settings({"SQL_AGENT_DB_PATH": "data/other.db"})
     assert s.db_path == BACKEND_DIR / "data" / "other.db"
+
+
+def test_logging_can_be_switched_off_or_moved(tmp_path):
+    assert load_settings({"SQL_AGENT_LOG_PATH": "off"}).log_path is None
+    assert load_settings({"SQL_AGENT_LOG_PATH": ""}).log_path is None
+    assert load_settings({"SQL_AGENT_LOG_PATH": str(tmp_path / "r.jsonl")}).log_path == tmp_path / "r.jsonl"
 
 
 def test_query_limits_can_be_tuned():

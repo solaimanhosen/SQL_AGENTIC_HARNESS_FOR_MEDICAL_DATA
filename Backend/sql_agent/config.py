@@ -26,6 +26,7 @@ DEFAULT_CSV_DIR = "data/synthea"
 DEFAULT_AS_OF = "latest"
 DEFAULT_MAX_ROWS = 200
 DEFAULT_QUERY_TIMEOUT = 15.0
+DEFAULT_LOG_PATH = "logs/runs.jsonl"
 
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MAX_OUTPUT_TOKENS = 128_000
@@ -54,6 +55,8 @@ class Settings:
     """Largest number of rows a single agent query may return."""
     query_timeout_seconds: float
     """Time limit for a single agent query, after which it is stopped."""
+    log_path: Path | None
+    """Where each run is appended as JSON, or None when logging is switched off."""
     refusal_fallback: bool
 
 
@@ -75,6 +78,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         as_of=_parse_as_of(env.get("SQL_AGENT_AS_OF_DATE", DEFAULT_AS_OF)),
         max_rows=_parse_int("SQL_AGENT_MAX_ROWS", env.get("SQL_AGENT_MAX_ROWS", str(DEFAULT_MAX_ROWS)), 1, 10_000),
         query_timeout_seconds=_parse_float("SQL_AGENT_QUERY_TIMEOUT", env.get("SQL_AGENT_QUERY_TIMEOUT", str(DEFAULT_QUERY_TIMEOUT)), 0.1, 300.0),
+        log_path=_parse_log_path(env.get("SQL_AGENT_LOG_PATH", DEFAULT_LOG_PATH)),
         refusal_fallback=_parse_bool("SQL_AGENT_REFUSAL_FALLBACK", env.get("SQL_AGENT_REFUSAL_FALLBACK", "true")),
     )
 
@@ -114,6 +118,13 @@ def _resolve_path(raw: str) -> Path:
     """Relative paths resolve against the Backend folder, so the CLI works from any directory."""
     path = Path(raw.strip()).expanduser()
     return path if path.is_absolute() else (BACKEND_DIR / path).resolve()
+
+
+def _parse_log_path(raw: str) -> Path | None:
+    value = raw.strip()
+    if value.lower() in ("", "off", "none"):
+        return None
+    return _resolve_path(value)
 
 
 def _parse_as_of(raw: str) -> str:

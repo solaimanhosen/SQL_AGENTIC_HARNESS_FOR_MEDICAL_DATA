@@ -14,6 +14,7 @@ from typing import Callable
 from langchain.agents import create_agent
 from langgraph.errors import GraphRecursionError
 
+from .answer import AnswerIssues, StructuredAnswer, check_answer, render_answer
 from .config import Settings, load_settings
 from .db import ReadOnlyDatabase
 from .llm import build_chat_model
@@ -33,6 +34,9 @@ class AgentError(RuntimeError):
 class AgentResult:
     question: str
     answer: str
+    """The rendered answer. The exact parts come from our own records, not from prose."""
+    structured: StructuredAnswer | None
+    issues: AnswerIssues
     queries: tuple[QueryRecord, ...]
     as_of: date
     model: str
@@ -68,7 +72,12 @@ class SqlAgent:
             raise AgentError("Ask a question.")
 
         toolbox = ToolBox(db=self.db, layer=self.layer, as_of=self.as_of, on_event=on_event)
-        agent = create_agent(build_chat_model(self.settings), toolbox.tools(), system_prompt=self.system_prompt)
+        agent = create_agent(
+            build_chat_model(self.settings),
+            toolbox.tools(),
+            system_prompt=self.system_prompt,
+            response_format=StructuredAnswer,
+        )
 
         started = time.perf_counter()
         try:
@@ -83,7 +92,16 @@ class SqlAgent:
             ) from None
 
         messages = state.get("messages", [])
-        answer_text = _final_text(messages)
+        queries = tuple(toolbox.queries)
+        structured = state.get("structured_response")
+        if isinstance(structured, StructuredAnswer):
+            issues = check_answer(structured, queries, self.layer, as_of=self.as_of)
+            answer_text = render_answer(structured, queries, self.layer, as_of=self.as_of)
+        else:
+            # The model answered in prose instead of filling in the schema. Rare, but the
+            # answer is still worth returning rather than failing the whole run.
+            structured, issues = None, AnswerIssues()
+            answer_text = _final_text(messages)
         if not answer_text:
             raise AgentError("The model finished without writing an answer.")
 
@@ -91,7 +109,9 @@ class SqlAgent:
         return AgentResult(
             question=question,
             answer=answer_text,
-            queries=tuple(toolbox.queries),
+            structured=structured,
+            issues=issues,
+            queries=queries,
             as_of=self.as_of,
             model=self.settings.model,
             elapsed_s=time.perf_counter() - started,

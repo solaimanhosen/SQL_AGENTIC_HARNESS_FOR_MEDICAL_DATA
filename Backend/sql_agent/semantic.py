@@ -11,6 +11,7 @@ quietly changing answers.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -224,6 +225,34 @@ def resolve_as_of_date(settings: Settings, db: ReadOnlyDatabase) -> date:
             raise ValueError("The encounters table has no dates, so the as-of date cannot be resolved.")
         return date.fromisoformat(str(latest))
     return date.fromisoformat(settings.as_of)
+
+
+WINDOW_MONTHS = (3, 6, 12, 24)
+
+
+def window_bounds(as_of: date | str, months: int) -> tuple[date, date]:
+    """First and last day of the last N months, using SQLite's own date arithmetic.
+
+    The bounds are computed by the same engine that will run the query, so the dates shown
+    to the reader cannot disagree with the dates the SQL selects.
+    """
+    conn = sqlite3.connect(":memory:")
+    try:
+        start, end = conn.execute(
+            "SELECT date(?, ?, '+1 day'), date(?)", (str(as_of), f"-{months} months", str(as_of))
+        ).fetchone()
+    finally:
+        conn.close()
+    return date.fromisoformat(start), date.fromisoformat(end)
+
+
+def describe_windows(as_of: date | str, months: tuple[int, ...] = WINDOW_MONTHS) -> str:
+    """The exact date range of each common window, for the agent to quote rather than derive."""
+    lines = []
+    for count in months:
+        start, end = window_bounds(as_of, count)
+        lines.append(f"- last {count} months: {start} to {end}")
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True)

@@ -45,9 +45,21 @@ indexes roughly double the file size, to about 100 MB.
 .venv/bin/python main.py --no-sql "Which age band has the most hospital visits?"
 ```
 
-The agent plans, runs read-only SQL, checks what it gets back, and explains the answer. The
-SQL printed underneath is recorded as each query runs, so it is what actually executed
-rather than what the model says it ran. Add `--verbose` to watch each step as it happens.
+The agent plans, runs read-only SQL, checks what it gets back, and explains the answer.
+
+Answers are structured rather than free prose. Each finding cites the numbered queries
+behind it, the definitions are printed from the semantic layer along with whether they are
+confirmed, and the dates of a time window are computed here rather than written by the
+model. Anything the answer claims that the run does not support, such as a cited query that
+never ran or a window no query filtered on, is printed under "Traceability warnings".
+
+The SQL shown is recorded as each query runs, so it is what actually executed rather than
+what the model says it ran. Add `--verbose` to watch each step as it happens, `--json` to
+get the whole run as JSON, and `--no-sql` to hide the queries.
+
+Every run is appended to `logs/runs.jsonl`, which is git-ignored. The log holds the
+question, the answer, every query and what the run cost, and it is the raw material for the
+evaluation harness. Set `SQL_AGENT_LOG_PATH=off` or pass `--no-log` to switch it off.
 
 ## The semantic layer
 
@@ -120,6 +132,7 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `SQL_AGENT_CSV_DIR` | `data/synthea` | Source CSV folder read by the loader. |
 | `SQL_AGENT_MAX_ROWS` | `200` | Largest number of rows one agent query may return. |
 | `SQL_AGENT_QUERY_TIMEOUT` | `15` | Seconds before a query is stopped. |
+| `SQL_AGENT_LOG_PATH` | `logs/runs.jsonl` | Where runs are logged. `off` disables logging. |
 | `SQL_AGENT_AS_OF_DATE` | `latest` | Anchor for "last N months": `latest`, `today` or `YYYY-MM-DD`. |
 | `SQL_AGENT_REFUSAL_FALLBACK` | `true` | Retry a declined request on a fallback model in the same call. |
 
@@ -132,6 +145,8 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/check_setup.py` | Setup check script. |
 | `main.py` | Command line entry point for asking a question. |
 | `sql_agent/agent.py` | The agent loop, and the reusable core a web service will call. |
+| `sql_agent/answer.py` | The shape of an answer, its rendering and its self-checks. |
+| `sql_agent/runlog.py` | Appends each run to the log. |
 | `sql_agent/tools.py` | The tools the agent can call, and the record of what they did. |
 | `sql_agent/prompts.py` | The agent's instructions. |
 | `sql_agent/semantic/` | Schema catalog and shared definitions, as YAML. |

@@ -25,6 +25,8 @@ class QueryRecord:
     """One attempt to run SQL, successful or not."""
 
     sql: str
+    number: int | None = None
+    """Position among the successful queries of a run, used when citing a result."""
     row_count: int | None = None
     elapsed_ms: float | None = None
     truncated: bool = False
@@ -60,6 +62,9 @@ class ToolBox:
             Only a single SELECT is allowed; writes and multiple statements are rejected.
             Results are capped, so aggregate in SQL rather than listing many rows. If the
             statement fails, the error explains what to change.
+
+            Each successful result is labelled with a query number. Cite those numbers in
+            your findings so the reader can trace every figure back to the SQL that ran.
             """
             self._announce("sql", query)
             try:
@@ -70,9 +75,11 @@ class ToolBox:
                 self._announce("sql_error", message)
                 return f"ERROR: {message}"
 
+            number = sum(1 for record in self.queries if record.ok) + 1
             self.queries.append(
                 QueryRecord(
                     sql=result.sql,
+                    number=number,
                     row_count=result.row_count,
                     elapsed_ms=result.elapsed_ms,
                     truncated=result.truncated,
@@ -80,7 +87,7 @@ class ToolBox:
             )
             self._announce("sql_result", f"{result.row_count} rows in {result.elapsed_ms:.0f} ms")
 
-            header = f"{result.row_count} rows in {result.elapsed_ms:.0f} ms"
+            header = f"Query {number} | {result.row_count} rows in {result.elapsed_ms:.0f} ms"
             if result.truncated:
                 header += (
                     f". Only the first {self.db.max_rows} rows are shown and more matched, "
