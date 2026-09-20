@@ -37,6 +37,18 @@ indexes the agent's joins rely on. The database is written to a temporary file a
 place only after those checks pass, so a failed run never leaves a half-built database. The
 indexes roughly double the file size, to about 100 MB.
 
+## Asking a question
+
+```bash
+.venv/bin/python main.py "How many diabetic patients had an ER visit?"
+.venv/bin/python main.py --verbose "Compare ER visits for diabetic and other patients over the last year"
+.venv/bin/python main.py --no-sql "Which age band has the most hospital visits?"
+```
+
+The agent plans, runs read-only SQL, checks what it gets back, and explains the answer. The
+SQL printed underneath is recorded as each query runs, so it is what actually executed
+rather than what the model says it ran. Add `--verbose` to watch each step as it happens.
+
 ## The semantic layer
 
 Shared definitions such as which codes count as diabetes live in
@@ -64,7 +76,12 @@ uses. Anything rejected here is rejected for the agent too.
 .venv/bin/python -m pytest
 ```
 
-The tests make no network calls.
+The tests make no network calls. An end to end test that does call the model is skipped by
+default:
+
+```bash
+RUN_LIVE_TESTS=1 .venv/bin/python -m pytest tests/test_agent_live.py -q
+```
 
 ## How queries are kept safe
 
@@ -113,6 +130,10 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/config.py` | Loads and validates settings. |
 | `sql_agent/llm.py` | Builds the Claude chat model. |
 | `sql_agent/check_setup.py` | Setup check script. |
+| `main.py` | Command line entry point for asking a question. |
+| `sql_agent/agent.py` | The agent loop, and the reusable core a web service will call. |
+| `sql_agent/tools.py` | The tools the agent can call, and the record of what they did. |
+| `sql_agent/prompts.py` | The agent's instructions. |
 | `sql_agent/semantic/` | Schema catalog and shared definitions, as YAML. |
 | `sql_agent/semantic.py` | Loads, renders and validates the semantic layer. |
 | `sql_agent/check_semantics.py` | Checks the definitions against the data. |

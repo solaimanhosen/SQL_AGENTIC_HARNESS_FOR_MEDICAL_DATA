@@ -15,18 +15,7 @@ import sys
 
 from .config import ConfigError, load_settings
 from .db import ReadOnlyDatabase
-
-
-def format_table(columns: tuple[str, ...], rows: tuple[tuple, ...]) -> str:
-    if not columns:
-        return "(no columns)"
-    widths = [len(str(column)) for column in columns]
-    for row in rows:
-        for index, cell in enumerate(row):
-            widths[index] = min(max(widths[index], len(str(cell))), 40)
-    def line(values) -> str:
-        return "  ".join(str(value)[:40].ljust(widths[index]) for index, value in enumerate(values))
-    return "\n".join([line(columns), "  ".join("-" * width for width in widths), *(line(row) for row in rows)])
+from .formatting import format_table
 
 
 def main(argv: list[str] | None = None) -> int:
