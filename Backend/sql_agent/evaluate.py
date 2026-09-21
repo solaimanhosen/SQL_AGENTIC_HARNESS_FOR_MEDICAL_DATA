@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -27,13 +26,13 @@ import anthropic
 import yaml
 
 from .agent import AgentResult, SqlAgent
+from .answer import numbers_in
 from .config import BACKEND_DIR, ConfigError, load_settings
 from .db import ReadOnlyDatabase
 
 DEFAULT_QUESTIONS_PATH = BACKEND_DIR / "evals" / "questions.yaml"
 DEFAULT_RESULTS_DIR = BACKEND_DIR / "evals" / "results"
 
-NUMBER_PATTERN = re.compile(r"\d[\d,]*(?:\.\d+)?")
 NUMBER_TOLERANCE = 0.01
 
 
@@ -119,17 +118,6 @@ def verify_golden_answers(cases: list[EvalCase], db: ReadOnlyDatabase) -> list[s
         if case.golden_value is not None and str(actual) != str(case.golden_value):
             problems.append(f"{case.id}: golden SQL now returns {actual!r}, the set says {case.golden_value!r}")
     return problems
-
-
-def numbers_in(text: str) -> set[float]:
-    """Every number in the text, with thousands separators removed."""
-    values = set()
-    for token in NUMBER_PATTERN.findall(text or ""):
-        try:
-            values.add(float(token.replace(",", "")))
-        except ValueError:
-            continue
-    return values
 
 
 def contains_number(text: str, value: float) -> bool:

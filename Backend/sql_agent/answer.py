@@ -9,12 +9,27 @@ actually ran.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
 from .semantic import SemanticLayer, window_bounds
 from .tools import QueryRecord
+
+
+NUMBER_PATTERN = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def numbers_in(text: str) -> set[float]:
+    """Every number in the text, with thousands separators removed."""
+    values = set()
+    for token in NUMBER_PATTERN.findall(text or ""):
+        try:
+            values.add(float(token.replace(",", "")))
+        except ValueError:
+            continue
+    return values
 
 
 class Finding(BaseModel):
@@ -108,8 +123,13 @@ def check_answer(
         window_not_in_sql=window_problem,
         unknown_definitions=tuple(name for name in answer.definitions_used if name.lower() not in layer.definitions),
         missing_query_numbers=tuple(sorted(referenced - available)),
+        # A finding that states a figure must show where the figure came from. A
+        # qualitative statement, such as explaining that a request was refused, needs no
+        # query behind it.
         unsupported_findings=tuple(
-            finding.statement for finding in answer.findings if not finding.query_numbers
+            finding.statement
+            for finding in answer.findings
+            if not finding.query_numbers and numbers_in(finding.statement)
         ),
     )
 

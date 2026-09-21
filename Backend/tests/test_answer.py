@@ -64,6 +64,20 @@ def test_render_marks_a_finding_with_no_query():
     assert "[no query cited]" in render_answer(answer, QUERIES, LAYER, as_of=AS_OF)
 
 
+def test_a_figure_without_a_query_is_flagged():
+    answer = _answer(findings=[Finding(statement="There are 42 patients.", query_numbers=[])])
+    assert check_answer(answer, QUERIES, LAYER, as_of=AS_OF).unsupported_findings == ("There are 42 patients.",)
+
+
+def test_a_qualitative_statement_needs_no_query():
+    """Refusing a request, or explaining a limit, states no figure and cites nothing."""
+    answer = _answer(
+        findings=[Finding(statement="I cannot report names, which are blocked.", query_numbers=[])],
+        time_window=TimeWindow(description="all dates in the data"),
+    )
+    assert not check_answer(answer, QUERIES, LAYER, as_of=AS_OF).any
+
+
 def test_clean_answer_has_no_issues():
     assert not check_answer(_answer(), QUERIES, LAYER, as_of=AS_OF).any
 
@@ -71,12 +85,15 @@ def test_clean_answer_has_no_issues():
 def test_check_catches_invented_definitions_and_missing_queries():
     answer = _answer(
         definitions_used=["diabetes", "made_up"],
-        findings=[Finding(statement="x", query_numbers=[1, 9]), Finding(statement="y", query_numbers=[])],
+        findings=[
+            Finding(statement="x", query_numbers=[1, 9]),
+            Finding(statement="8 patients, from nowhere.", query_numbers=[]),
+        ],
     )
     issues = check_answer(answer, QUERIES, LAYER, as_of=AS_OF)
     assert issues.unknown_definitions == ("made_up",)
     assert issues.missing_query_numbers == (9,)
-    assert issues.unsupported_findings == ("y",)
+    assert issues.unsupported_findings == ("8 patients, from nowhere.",)
     assert issues.any
 
 
