@@ -23,9 +23,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+import anthropic
 import yaml
 
-from .agent import AgentError, AgentResult, SqlAgent
+from .agent import AgentResult, SqlAgent
 from .config import BACKEND_DIR, ConfigError, load_settings
 from .db import ReadOnlyDatabase
 
@@ -63,10 +64,17 @@ class CaseResult:
     checks: tuple[CheckOutcome, ...]
     result: AgentResult | None = None
     error: str | None = None
+    unavailable: bool = False
+    """True when the model could not be reached at all, so the agent was never tested."""
 
     @property
     def passed(self) -> bool:
         return self.error is None and all(check.passed for check in self.checks)
+
+    @property
+    def failed(self) -> bool:
+        """A wrong answer, as opposed to a question that could not be asked."""
+        return not self.passed and not self.unavailable
 
     @property
     def failures(self) -> tuple[CheckOutcome, ...]:
@@ -239,6 +247,14 @@ class EvalReport:
     def passed(self) -> int:
         return sum(1 for case in self.results if case.passed)
 
+    @property
+    def unavailable(self) -> int:
+        return sum(1 for case in self.results if case.unavailable)
+
+    @property
+    def answered(self) -> int:
+        return len(self.results) - self.unavailable
+
     def dimension_totals(self) -> dict[str, tuple[int, int]]:
         totals: dict[str, list[int]] = {}
         for case in self.results:
@@ -253,7 +269,12 @@ class EvalReport:
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "model": self.model,
             "as_of": self.as_of,
-            "score": {"passed": self.passed, "total": len(self.results)},
+            "score": {
+                "passed": self.passed,
+                "answered": self.answered,
+                "total": len(self.results),
+                "unavailable": self.unavailable,
+            },
             "dimensions": {name: list(counts) for name, counts in self.dimension_totals().items()},
             "elapsed_s": round(self.elapsed_s, 1),
             "input_tokens": sum(case.result.input_tokens for case in self.results if case.result),
@@ -264,6 +285,7 @@ class EvalReport:
                     "category": case.case.category,
                     "question": case.case.question,
                     "passed": case.passed,
+                    "unavailable": case.unavailable,
                     "error": case.error,
                     "checks": [
                         {"name": check.name, "passed": check.passed, "detail": check.detail} for check in case.checks
@@ -281,7 +303,13 @@ class EvalReport:
         }
 
     def summary_text(self) -> str:
-        lines = [f"\nScore {self.passed}/{len(self.results)} ({self.passed / max(len(self.results), 1):.0%})"]
+        share = self.passed / max(self.answered, 1)
+        lines = [f"\nScore {self.passed}/{self.answered} answered ({share:.0%})"]
+        if self.unavailable:
+            lines.append(
+                f"  {self.unavailable} question(s) could not be asked because the Anthropic API "
+                "was unavailable, so they are not scored."
+            )
         for name, (passed, total) in sorted(self.dimension_totals().items()):
             lines.append(f"  {name:<20} {passed}/{total}")
         data = self.to_dict()
@@ -306,8 +334,15 @@ def run_evaluation(
             answer = agent.answer(case.question)
             checks = score_case(case, answer, db, before)
             case_result = CaseResult(case=case, checks=tuple(checks), result=answer)
-        except (AgentError, Exception) as exc:  # a crash is a failure, not a reason to stop
-            case_result = CaseResult(case=case, checks=(), error=f"{type(exc).__name__}: {exc}")
+        except Exception as exc:  # a crash is a failure, not a reason to stop the run
+            case_result = CaseResult(
+                case=case,
+                checks=(),
+                error=f"{type(exc).__name__}: {exc}",
+                # An API problem such as an expired key, no credit or a rate limit says
+                # nothing about the agent, so it must not be scored as a wrong answer.
+                unavailable=isinstance(exc, anthropic.APIError),
+            )
         results.append(case_result)
         if on_case is not None:
             on_case(case_result)
@@ -329,7 +364,8 @@ def _print_case(case_result: CaseResult) -> None:
     cost = ""
     if case_result.result:
         cost = f"{len(case_result.result.successful_queries)} queries, {case_result.result.elapsed_s:.0f}s"
-    print(f"  {'PASS' if case_result.passed else 'FAIL'}  {case.id:<28} {case.category:<12} {cost:<18} {detail}")
+    mark = "PASS" if case_result.passed else ("SKIP" if case_result.unavailable else "FAIL")
+    print(f"  {mark}  {case.id:<28} {case.category:<12} {cost:<18} {detail}")
     sys.stdout.flush()
 
 
@@ -380,6 +416,8 @@ def main(argv: list[str] | None = None) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
     print(f"Report written to {out_path}")
+    if report.unavailable:
+        return 2  # nothing is known about those questions, which is not the same as a pass
     return 0 if report.passed == len(report.results) else 1
 
 

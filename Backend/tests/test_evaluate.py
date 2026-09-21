@@ -167,3 +167,39 @@ def test_claims_come_from_the_model_not_our_rendering():
     result = _result(answer="rendered text mentioning 2026-08-16")
     assert "2026-08-16" not in claim_text(result)
     assert "8 patients have diabetes." in claim_text(result)
+
+
+def test_an_api_outage_is_not_counted_as_a_wrong_answer(real_db):
+    """Running out of credit says nothing about the agent, so it must not be scored as a failure."""
+    import httpx2
+
+    import anthropic
+
+    from sql_agent.evaluate import run_evaluation
+
+    class BrokenAgent:
+        settings = type("S", (), {"model": "claude-opus-5"})()
+        as_of = date(2026, 8, 16)
+
+        def answer(self, question):
+            raise anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"))
+
+    report = run_evaluation([CASE], BrokenAgent(), real_db)
+    case_result = report.results[0]
+    assert case_result.unavailable and not case_result.failed
+    assert report.unavailable == 1 and report.answered == 0
+    assert "could not be asked" in report.summary_text()
+
+
+def test_a_wrong_answer_is_still_counted_as_a_failure(real_db):
+    from sql_agent.evaluate import run_evaluation
+
+    class ConfusedAgent:
+        settings = type("S", (), {"model": "claude-opus-5"})()
+        as_of = date(2026, 8, 16)
+
+        def answer(self, question):
+            raise ValueError("something in our own code broke")
+
+    case_result = run_evaluation([CASE], ConfusedAgent(), real_db).results[0]
+    assert case_result.failed and not case_result.unavailable
