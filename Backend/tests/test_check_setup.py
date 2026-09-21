@@ -28,3 +28,12 @@ def test_real_database_opens_read_only():
     if not settings.db_path.exists():
         pytest.skip("synthea.db not built; run load_csv_to_sqlite.py")
     assert check_setup.check_database(settings) is True
+
+
+def test_table_count_ignores_sqlite_internal_tables(capsys):
+    """ANALYZE writes sqlite_stat1, which should not be counted as one of the data tables."""
+    settings = load_settings({})
+    if not settings.db_path.exists():
+        pytest.skip("synthea.db not built; run python -m sql_agent.load_data")
+    assert check_setup.check_database(settings) is True
+    assert "18 tables" in capsys.readouterr().out

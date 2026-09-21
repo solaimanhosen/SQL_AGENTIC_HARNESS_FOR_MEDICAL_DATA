@@ -43,7 +43,10 @@ def check_database(settings: Settings) -> bool:
         return False
     conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
     try:
-        table_count = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'").fetchone()[0]
+        # Internal tables such as sqlite_stat1, written by ANALYZE, are not part of the data.
+        table_count = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchone()[0]
         latest = conn.execute("SELECT date(MAX(start)) FROM encounters").fetchone()[0]
     except sqlite3.Error as exc:
         _report("FAIL", "Database", f"{path.name} opened but could not be queried: {exc}")
