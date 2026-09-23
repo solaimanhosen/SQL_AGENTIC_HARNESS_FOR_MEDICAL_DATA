@@ -10,6 +10,7 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+.venv-docs/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -24,8 +25,9 @@ Backend/synthea.db
 Backend/logs/
 Backend/evals/results/
 
-# --- Local working notes, not shared ---
+# --- Local working notes and presentation material, not shared ---
 CLAUDE.md
+presentation-local/
 
 # --- OS / editor ---
 .DS_Store
