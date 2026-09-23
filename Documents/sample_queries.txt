@@ -1,0 +1,10 @@
+| Project question                                | Synthea tables                         |
+| ----------------------------------------------- | -------------------------------------- |
+| How many diabetic patients had an ER visit?     | `patients`, `conditions`, `encounters` |
+| Compare diabetic vs. non-diabetic ER visits     | `patients`, `conditions`, `encounters` |
+| Which patient groups have the most visits?      | `patients`, `encounters`               |
+| Show hospital visits by month                   | `encounters`                           |
+| What medications are used by diabetic patients? | `conditions`, `medications`            |
+| Average lab result for a patient group          | `patients`, `observations`             |
+| Procedures performed during hospital visits     | `encounters`, `procedures`             |
+| Cost/claims analysis                            | `claims`, `encounters`, `payers`       |
