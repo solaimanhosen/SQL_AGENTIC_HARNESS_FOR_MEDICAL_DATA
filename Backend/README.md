@@ -79,15 +79,36 @@ curl -s -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \
 | GET | `/api/schema` | The documented tables and columns. Identity columns never appear. |
 | GET | `/api/definitions` | Every shared definition with its confirmation status. |
 | POST | `/api/ask` | The answer, its findings, the SQL with its rows, and any traceability warnings. |
+| POST | `/api/ask/stream` | The same answer, preceded by each step as it happens, as server-sent events. |
 
 The answer carries the same parts the command line prints, filled in from our own records:
 each definition's status comes from the semantic layer, and the window dates are computed
 here. Each query comes with the rows it returned, capped at the row limit, so the interface
 can show the evidence. The rows are not written to the run log.
 
+Every answer belongs to a conversation. Send the `conversation_id` from one answer with the
+next question, and a follow-up such as "what about heart disease?" is understood. The agent
+sees the last six questions with their answers and SQL as context. Query numbers start
+again at 1 for each question, and a figure from an earlier answer must be queried again
+before it is stated, so every citation still points at SQL that ran for this question.
+Conversations are held in memory and a restart forgets them. One question at a time may be
+answered in a conversation. A second one asked meanwhile gets a 409.
+
+```bash
+curl -sN -X POST localhost:8000/api/ask/stream -H 'Content-Type: application/json' \
+     -d '{"question": "What about heart disease?", "conversation_id": "<id from the last answer>"}'
+```
+
+The stream sends a `conversation` event first, then a `step` event for each query, table
+lookup and definition lookup, then either `answer`, with the same body `/api/ask` returns,
+or `error`. It is a POST, so a browser reads it with `fetch` rather than `EventSource`.
+A question keeps running if the reader disconnects, so its answer still reaches the log and
+the conversation.
+
 Errors come back as `{"error": kind, "message": text}`. A question the agent could not
-answer is a 422, and a failure at the Anthropic API is a 502 or 503. The agent runs in a
-worker thread, so a slow question does not block other requests.
+answer is a 422, and a failure at the Anthropic API is a 502 or 503. An unknown or expired
+conversation is a 404. The agent runs in a worker thread, so a slow question does not
+block other requests.
 
 The service has no access control yet and listens on this machine only. Only the origins in
 `SQL_AGENT_CORS_ORIGINS` may call it from a browser.
@@ -204,6 +225,7 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `main.py` | Command line entry point for asking a question. |
 | `sql_agent/service.py` | The HTTP service, a thin layer over the agent. |
 | `sql_agent/serve.py` | Runs the service. |
+| `sql_agent/conversations.py` | Holds each conversation's recent turns for follow-up questions. |
 | `sql_agent/agent.py` | The agent loop, and the reusable core a web service will call. |
 | `sql_agent/answer.py` | The shape of an answer, its rendering and its self-checks. |
 | `sql_agent/runlog.py` | Appends each run to the log. |

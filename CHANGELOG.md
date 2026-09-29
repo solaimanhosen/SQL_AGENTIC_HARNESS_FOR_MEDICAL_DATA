@@ -14,10 +14,18 @@ v1 is the backend, v2 will add the web interface.
 - Each recorded query keeps the rows it returned, so the interface can show the evidence.
   The run log still leaves the rows out.
 - `SQL_AGENT_CORS_ORIGINS` limits which browser origins may call the service.
+- Follow-up questions. `SqlAgent.answer` takes the earlier turns of a conversation, and the
+  service keeps them in memory by conversation id. Earlier answers are context, not
+  evidence: query numbers restart with each question and cited figures must be re-queried.
+- `/api/ask/stream` sends each step as a server-sent event while the agent works, then the
+  answer.
+- Three follow-up questions in the evaluation set, asked after an earlier question in the
+  same conversation.
 
 ### Changed
 
 - The command line and the service share one wording for failures.
+- The run log records the conversation id and the earlier questions of a follow-up.
 - The live prompt injection test checks that the agent does not obey an instruction hidden
   in the data, rather than that it never mentions the instruction.
 

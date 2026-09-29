@@ -6,7 +6,9 @@ and a web service can call the same `answer` method later without changes.
 
 from __future__ import annotations
 
+import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Callable
@@ -25,6 +27,13 @@ from .tools import QueryRecord, ToolBox
 
 # How many model and tool turns one question may take before it is stopped.
 DEFAULT_MAX_STEPS = 30
+
+# How many earlier questions a follow-up sees. Older ones are dropped to bound the cost.
+MAX_HISTORY_TURNS = 6
+
+# An earlier answer is context, not evidence, so its query citations are removed: query
+# numbers restart with every question and must only ever point at this question's SQL.
+CITATION_PATTERN = re.compile(r" ?\[(?:query [\d, ]+|no query cited)\]")
 
 
 class AgentError(RuntimeError):
@@ -49,6 +58,23 @@ def describe_failure(exc: BaseException) -> tuple[str, str] | None:
 
 
 @dataclass(frozen=True)
+class Turn:
+    """An earlier question in the same conversation, as the agent is shown it again."""
+
+    question: str
+    answer: str
+    """The rendered answer, with its query citations removed."""
+    sql: tuple[str, ...] = ()
+    """The SQL that succeeded, so a follow-up can adapt it instead of starting over."""
+
+    def as_messages(self) -> list[dict]:
+        reply = self.answer
+        if self.sql:
+            reply += "\n\nSQL that produced this earlier answer:\n\n" + "\n\n".join(self.sql)
+        return [{"role": "user", "content": self.question}, {"role": "assistant", "content": reply}]
+
+
+@dataclass(frozen=True)
 class AgentResult:
     question: str
     answer: str
@@ -61,10 +87,20 @@ class AgentResult:
     elapsed_s: float
     input_tokens: int
     output_tokens: int
+    history: tuple[Turn, ...] = ()
+    """The earlier turns the agent was shown, oldest first."""
 
     @property
     def successful_queries(self) -> tuple[QueryRecord, ...]:
         return tuple(record for record in self.queries if record.ok)
+
+    def as_turn(self) -> Turn:
+        """This run, in the form a follow-up question sees it."""
+        return Turn(
+            question=self.question,
+            answer=CITATION_PATTERN.sub("", self.answer),
+            sql=tuple(record.sql for record in self.successful_queries),
+        )
 
 
 class SqlAgent:
@@ -83,11 +119,24 @@ class SqlAgent:
         self.max_steps = max_steps
         self.system_prompt = build_system_prompt(self.layer, self.as_of, max_rows=self.db.max_rows)
 
-    def answer(self, question: str, *, on_event: Callable[[str, str], None] | None = None) -> AgentResult:
-        """Answer one question, recording every query that ran along the way."""
+    def answer(
+        self,
+        question: str,
+        *,
+        history: Sequence[Turn] = (),
+        on_event: Callable[[str, str], None] | None = None,
+    ) -> AgentResult:
+        """Answer one question, recording every query that ran along the way.
+
+        `history` holds the earlier turns of a conversation, so a follow-up such as "what
+        about heart disease?" can be understood. Only the most recent turns are kept.
+        """
         question = (question or "").strip()
         if not question:
             raise AgentError("Ask a question.")
+        history = tuple(history)[-MAX_HISTORY_TURNS:]
+        messages = [message for turn in history for message in turn.as_messages()]
+        messages.append({"role": "user", "content": question})
 
         toolbox = ToolBox(db=self.db, layer=self.layer, as_of=self.as_of, on_event=on_event)
         agent = create_agent(
@@ -100,7 +149,7 @@ class SqlAgent:
         started = time.perf_counter()
         try:
             state = agent.invoke(
-                {"messages": [{"role": "user", "content": question}]},
+                {"messages": messages},
                 config={"recursion_limit": self.max_steps},
             )
         except GraphRecursionError:
@@ -135,6 +184,7 @@ class SqlAgent:
             elapsed_s=time.perf_counter() - started,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            history=history,
         )
 
 

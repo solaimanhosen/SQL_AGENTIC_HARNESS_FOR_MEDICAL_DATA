@@ -181,7 +181,7 @@ def test_an_api_outage_is_not_counted_as_a_wrong_answer(real_db):
         settings = type("S", (), {"model": "claude-opus-5"})()
         as_of = date(2026, 8, 16)
 
-        def answer(self, question):
+        def answer(self, question, *, history=()):
             raise anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"))
 
     report = run_evaluation([CASE], BrokenAgent(), real_db)
@@ -198,8 +198,45 @@ def test_a_wrong_answer_is_still_counted_as_a_failure(real_db):
         settings = type("S", (), {"model": "claude-opus-5"})()
         as_of = date(2026, 8, 16)
 
-        def answer(self, question):
+        def answer(self, question, *, history=()):
             raise ValueError("something in our own code broke")
 
     case_result = run_evaluation([CASE], ConfusedAgent(), real_db).results[0]
     assert case_result.failed and not case_result.unavailable
+
+
+def test_a_follow_up_case_asks_its_earlier_questions_first_in_one_conversation(real_db):
+    from sql_agent.evaluate import run_evaluation
+
+    class RecordingAgent:
+        settings = type("S", (), {"model": "claude-opus-5"})()
+        as_of = date(2026, 8, 16)
+
+        def __init__(self):
+            self.calls = []
+
+        def answer(self, question, *, history=()):
+            self.calls.append((question, [turn.question for turn in history]))
+            return _result(
+                question=question,
+                structured=StructuredAnswer(
+                    headline="17 patients have heart disease.",
+                    findings=[Finding(statement="17 patients have heart disease.", query_numbers=[1])],
+                ),
+            )
+
+    case = EvalCase(
+        id="follow",
+        category="follow_up",
+        question="What about heart disease?",
+        expect={"numbers": [17]},
+        history=("How many patients have diabetes?",),
+    )
+    agent = RecordingAgent()
+    case_result = run_evaluation([case], agent, real_db).results[0]
+    assert agent.calls == [
+        ("How many patients have diabetes?", []),
+        ("What about heart disease?", ["How many patients have diabetes?"]),
+    ]
+    assert case_result.passed and len(case_result.history_results) == 1
+    assert case_result.tokens == (2 * case_result.result.input_tokens, 2 * case_result.result.output_tokens)

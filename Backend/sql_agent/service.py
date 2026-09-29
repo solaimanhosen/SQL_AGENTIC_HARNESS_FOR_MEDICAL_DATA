@@ -10,11 +10,16 @@ Run it from the Backend folder:
     .venv/bin/python -m sql_agent.serve
 
 The agent runs in a worker thread, so a slow question does not block health checks or
-other requests.
+other requests. Questions can belong to a conversation, so a follow-up such as "what about
+heart disease?" is understood, and `/api/ask/stream` sends each step as it happens.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
+from collections.abc import AsyncIterator, Callable
 from datetime import date
 from typing import Any, Literal
 
@@ -23,16 +28,20 @@ import anyio
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .agent import AgentError, AgentResult, SqlAgent, describe_failure
+from .agent import AgentError, AgentResult, SqlAgent, Turn, describe_failure
 from .answer import describe_window
+from .conversations import ConversationBusy, ConversationStore, UnknownConversation
 from .runlog import log_run
 from .semantic import SemanticLayer, window_bounds
 from .tools import QueryRecord
 
 MAX_QUESTION_CHARS = 2_000
+CONVERSATION_ID_PATTERN = r"^[0-9a-f]{32}$"
+
+logger = logging.getLogger(__name__)
 
 # What each kind of failure means to a caller. The agent could not answer the question as
 # asked, or the model provider failed, which is not the caller's fault.
@@ -41,6 +50,11 @@ FAILURE_STATUS = {"agent": 422, "auth": 502, "api": 502, "connection": 503}
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
+    conversation_id: str | None = Field(
+        default=None,
+        pattern=CONVERSATION_ID_PATTERN,
+        description="Continue this conversation. Leave it out to start a new one.",
+    )
 
 
 class FindingOut(BaseModel):
@@ -85,6 +99,9 @@ class IssuesOut(BaseModel):
 
 
 class AnswerOut(BaseModel):
+    conversation_id: str
+    turn: int
+    """The position of this question in its conversation, starting at 1."""
     question: str
     answer: str
     """The rendered answer, the same text the command line prints."""
@@ -133,17 +150,20 @@ class ErrorOut(BaseModel):
     message: str
 
 
-def create_app(agent: SqlAgent | None = None) -> FastAPI:
+def create_app(agent: SqlAgent | None = None, conversations: ConversationStore | None = None) -> FastAPI:
     """Build the service around one agent, which is safe to share between requests.
 
     Each call to `answer` builds its own tools and graph, and the database opens a fresh
     read-only connection per query, so concurrent questions do not share state.
     """
     agent = agent or SqlAgent()
+    conversations = ConversationStore() if conversations is None else conversations
+    # Streaming runs outlive their connection, so they are held here until they finish.
+    background: set[asyncio.Task] = set()
     app = FastAPI(
         title="SQL agent",
         summary="Questions about synthetic patient data, answered with traceable SQL.",
-        responses={422: {"model": ErrorOut}, 502: {"model": ErrorOut}, 503: {"model": ErrorOut}},
+        responses={status: {"model": ErrorOut} for status in (404, 409, 422, 502, 503)},
     )
     app.add_middleware(
         CORSMiddleware,
@@ -163,8 +183,15 @@ def create_app(agent: SqlAgent | None = None) -> FastAPI:
     @app.exception_handler(AgentError)
     @app.exception_handler(anthropic.APIError)
     async def failed(_: Request, exc: Exception) -> JSONResponse:
-        kind, message = describe_failure(exc) or ("api", "The Anthropic API returned an unexpected response.")
-        return _error(FAILURE_STATUS[kind], kind, message)
+        return _error(*_failure(exc))
+
+    @app.exception_handler(UnknownConversation)
+    async def unknown_conversation(_: Request, exc: UnknownConversation) -> JSONResponse:
+        return _error(404, "unknown_conversation", "This conversation has expired or never existed. Start a new one.")
+
+    @app.exception_handler(ConversationBusy)
+    async def busy_conversation(_: Request, exc: ConversationBusy) -> JSONResponse:
+        return _error(409, "busy", "This conversation is still answering the previous question.")
 
     @app.get("/api/health")
     def health() -> HealthOut:
@@ -190,17 +217,133 @@ def create_app(agent: SqlAgent | None = None) -> FastAPI:
 
     @app.post("/api/ask")
     async def ask(request: AskRequest) -> AnswerOut:
-        result = await anyio.to_thread.run_sync(_answer_and_log, agent, request.question)
-        return answer_payload(result, agent.layer)
+        conversation_id, history, turn = conversations.begin(request.conversation_id)
+        return await _run(agent, conversations, conversation_id, history, turn, request.question)
+
+    @app.post(
+        "/api/ask/stream",
+        response_class=StreamingResponse,
+        responses={200: {"content": {"text/event-stream": {}}, "description": STREAM_DESCRIPTION}},
+    )
+    async def ask_stream(request: AskRequest) -> StreamingResponse:
+        # Claim the conversation and start the run before the stream starts, so an unknown
+        # or busy conversation is an ordinary error response, and a reader that never
+        # arrives cannot leave the conversation claimed.
+        conversation_id, history, turn = conversations.begin(request.conversation_id)
+        events = _start(agent, conversations, conversation_id, history, turn, request.question, background)
+        return StreamingResponse(
+            _relay(events, conversation_id, turn),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return app
 
 
-def _answer_and_log(agent: SqlAgent, question: str) -> AgentResult:
-    result = agent.answer(question)
+STREAM_DESCRIPTION = """Server-sent events, read with fetch because the request is a POST.
+
+- `conversation`: `{conversation_id, turn}`, sent first.
+- `step`: `{kind, detail}` for each step, where kind is sql, sql_result, sql_error,
+  describe_table or lookup_definition.
+- `answer`: the same body `/api/ask` returns. The stream then ends.
+- `error`: `{error, message, status}`. The stream then ends.
+"""
+
+
+async def _run(
+    agent: SqlAgent,
+    conversations: ConversationStore,
+    conversation_id: str,
+    history: tuple[Turn, ...],
+    turn: int,
+    question: str,
+    on_event: Callable[[str, str], None] | None = None,
+) -> AnswerOut:
+    """Answer one question in a conversation that `begin` has already claimed."""
+    answered = None
+    try:
+        result = await anyio.to_thread.run_sync(
+            _answer_and_log, agent, question, history, conversation_id, on_event
+        )
+        answered = result.as_turn()
+        return answer_payload(result, agent.layer, conversation_id=conversation_id, turn=turn)
+    finally:
+        conversations.finish(conversation_id, answered)
+
+
+def _answer_and_log(
+    agent: SqlAgent,
+    question: str,
+    history: tuple[Turn, ...],
+    conversation_id: str,
+    on_event: Callable[[str, str], None] | None,
+) -> AgentResult:
+    result = agent.answer(question, history=history, on_event=on_event)
     if agent.settings.log_path is not None:
-        log_run(result, agent.settings.log_path)
+        log_run(result, agent.settings.log_path, conversation_id=conversation_id)
     return result
+
+
+def _start(
+    agent: SqlAgent,
+    conversations: ConversationStore,
+    conversation_id: str,
+    history: tuple[Turn, ...],
+    turn: int,
+    question: str,
+    background: set[asyncio.Task],
+) -> asyncio.Queue[tuple[str, dict]]:
+    """Run the question as its own task, returning the queue its events arrive on.
+
+    The run is not tied to the connection. If the reader goes away, the question is still
+    answered, logged and added to the conversation, so a reconnecting interface finds the
+    conversation free and up to date.
+    """
+    loop = asyncio.get_running_loop()
+    events: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
+
+    def on_event(kind: str, detail: str) -> None:
+        # Called from the worker thread, so the event is handed to the event loop.
+        try:
+            loop.call_soon_threadsafe(events.put_nowait, ("step", {"kind": kind, "detail": detail}))
+        except RuntimeError:
+            pass  # the event loop has closed, so nobody is listening
+
+    async def run() -> None:
+        try:
+            answer = await _run(agent, conversations, conversation_id, history, turn, question, on_event)
+            events.put_nowait(("answer", answer.model_dump(mode="json")))
+        except (AgentError, anthropic.APIError) as exc:
+            status, kind, message = _failure(exc)
+            events.put_nowait(("error", {"error": kind, "message": message, "status": status}))
+        except Exception:
+            logger.exception("Streaming question failed")
+            events.put_nowait(("error", {"error": "internal", "message": "The service failed unexpectedly.", "status": 500}))
+
+    task = asyncio.create_task(run())
+    background.add(task)
+    task.add_done_callback(background.discard)
+    return events
+
+
+async def _relay(events: asyncio.Queue[tuple[str, dict]], conversation_id: str, turn: int) -> AsyncIterator[str]:
+    """Server-sent events for one run, ending with its answer or its error."""
+    yield _sse("conversation", {"conversation_id": conversation_id, "turn": turn})
+    while True:
+        event, data = await events.get()
+        yield _sse(event, data)
+        if event in ("answer", "error"):
+            return
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _failure(exc: Exception) -> tuple[int, str, str]:
+    """The status, kind and message for a failure of the agent or of the model provider."""
+    kind, message = describe_failure(exc) or ("api", "The Anthropic API returned an unexpected response.")
+    return FAILURE_STATUS[kind], kind, message
 
 
 def _error(status: int, kind: str, message: str) -> JSONResponse:
@@ -243,7 +386,7 @@ def definition_payload(layer: SemanticLayer, name: str) -> DefinitionOut:
     )
 
 
-def answer_payload(result: AgentResult, layer: SemanticLayer) -> AnswerOut:
+def answer_payload(result: AgentResult, layer: SemanticLayer, *, conversation_id: str, turn: int) -> AnswerOut:
     structured = result.structured
     time_window = None
     if structured is not None:
@@ -259,6 +402,8 @@ def answer_payload(result: AgentResult, layer: SemanticLayer) -> AnswerOut:
         )
     issues = result.issues
     return AnswerOut(
+        conversation_id=conversation_id,
+        turn=turn,
         question=result.question,
         answer=result.answer,
         structured=structured is not None,
