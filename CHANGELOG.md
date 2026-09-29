@@ -3,7 +3,11 @@
 Notable changes to this project, newest first. Versions follow the project milestones:
 v1 is the backend, v2 will add the web interface.
 
-## Unreleased
+## v1.1.0 — 28 September 2026
+
+The backend becomes a service the web interface can call. It adds an HTTP API over the same
+agent, follow-up questions, live steps, and the access and spending controls a shared
+instance needs.
 
 ### Added
 
