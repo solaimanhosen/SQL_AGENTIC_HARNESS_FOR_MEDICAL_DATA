@@ -3,6 +3,23 @@
 Notable changes to this project, newest first. Versions follow the project milestones:
 v1 is the backend, v2 will add the web interface.
 
+## Unreleased
+
+### Added
+
+- The web interface, in Angular 22 under `Frontend/`. Ask a question in the browser and
+  read the answer: its headline, findings with their query citations, and caveats. Each
+  step appears live while the agent works, and follow-up questions continue the
+  conversation. The page asks for the access token when the service requires one and keeps
+  it in memory only.
+- A development proxy from the interface to the service, so the browser sees one origin.
+- Unit tests for the interface, including one proving that text from the data is shown as
+  text and never run as markup.
+
+### Changed
+
+- The root README now describes the project instead of the repository template.
+
 ## v1.1.0 — 28 September 2026
 
 The backend becomes a service the web interface can call. It adds an HTTP API over the same

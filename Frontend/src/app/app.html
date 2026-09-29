@@ -1,0 +1,70 @@
+<header class="bar">
+  <div class="title">
+    <h1>Patient data questions</h1>
+    <p class="status" [class.down]="health() === 'unreachable'" role="status">
+      @switch (health()) {
+        @case ('checking') {
+          Connecting to the service…
+        }
+        @case ('unreachable') {
+          Service unreachable. Start it with: .venv/bin/python -m sql_agent.serve
+        }
+        @default {
+          @let info = healthInfo()!;
+          {{ info.model }} · synthetic data as of {{ info.as_of }}
+        }
+      }
+    </p>
+  </div>
+  <button
+    type="button"
+    class="secondary"
+    [disabled]="store.busy() || !store.exchanges().length"
+    (click)="store.newConversation()"
+  >
+    New conversation
+  </button>
+</header>
+
+<main class="thread">
+  @if (!store.exchanges().length) {
+    <section class="intro">
+      <h2>Ask about the patient database in plain language</h2>
+      <p>
+        The agent writes read-only SQL, checks the results, and explains the answer with the queries
+        behind every figure. Follow-up questions build on the conversation.
+      </p>
+      <ul class="examples">
+        @for (example of examples; track example) {
+          <li>
+            <button type="button" class="example" [disabled]="store.busy()" (click)="ask(example)">
+              {{ example }}
+            </button>
+          </li>
+        }
+      </ul>
+    </section>
+  }
+
+  @for (exchange of store.exchanges(); track exchange.id) {
+    <app-exchange-view [exchange]="exchange" (retry)="store.retry($event)" />
+  }
+
+  @if (store.needsToken()) {
+    <app-token-prompt (save)="useToken($event)" />
+  }
+  <div #end></div>
+</main>
+
+<footer class="composer-bar">
+  <app-composer
+    [busy]="store.busy()"
+    [placeholder]="
+      store.exchanges().length
+        ? 'Ask a follow-up, or a new question'
+        : 'Ask a question about the patient data'
+    "
+    (ask)="ask($event)"
+  />
+  <p class="note">Synthetic Synthea data. Questions and results are sent to the Anthropic API.</p>
+</footer>

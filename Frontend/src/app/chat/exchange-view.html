@@ -1,0 +1,67 @@
+@let item = exchange();
+<article class="exchange">
+  <p class="question">{{ item.question }}</p>
+
+  @switch (item.status) {
+    @case ('working') {
+      <div class="card working" role="status" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>{{ latestStep() }}</span>
+        @if (queriesRun()) {
+          <span class="muted"
+            >· {{ queriesRun() }} {{ queriesRun() === 1 ? 'query' : 'queries' }} run</span
+          >
+        }
+      </div>
+    }
+    @case ('answered') {
+      @let answer = item.answer!;
+      <div class="card answer">
+        @if (answer.structured) {
+          <p class="headline">{{ answer.headline }}</p>
+          @if (answer.findings.length) {
+            <ul class="findings">
+              @for (finding of answer.findings; track $index) {
+                <li>
+                  {{ finding.statement }}
+                  <span class="cite" [class.uncited]="!finding.query_numbers.length">{{
+                    citation(finding.query_numbers)
+                  }}</span>
+                </li>
+              }
+            </ul>
+          }
+          @if (answer.caveats.length) {
+            <div class="caveats">
+              <h3>Caveats</h3>
+              <ul>
+                @for (caveat of answer.caveats; track $index) {
+                  <li>{{ caveat }}</li>
+                }
+              </ul>
+            </div>
+          }
+        } @else {
+          <p class="prose">{{ answer.answer }}</p>
+        }
+        @if (answer.issues.any) {
+          <p class="warning" role="note">
+            Some parts of this answer could not be traced to a query that ran.
+          </p>
+        }
+        <p class="meta">
+          {{ successfulQueries() }} {{ successfulQueries() === 1 ? 'query' : 'queries' }} ·
+          {{ answer.elapsed_s }}s · data as of {{ answer.as_of }}
+        </p>
+      </div>
+    }
+    @case ('failed') {
+      <div class="card failed" role="alert">
+        <p>{{ item.error?.message }}</p>
+        @if (item.error?.kind !== 'unauthorized') {
+          <button type="button" class="link" (click)="retry.emit(item.id)">Try again</button>
+        }
+      </div>
+    }
+  }
+</article>
