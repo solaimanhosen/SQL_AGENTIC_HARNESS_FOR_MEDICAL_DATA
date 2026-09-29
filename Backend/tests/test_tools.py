@@ -32,6 +32,8 @@ def test_run_sql_returns_rows_and_records_them(toolbox):
     assert "wellness" in output
     assert len(toolbox.queries) == 1
     assert toolbox.queries[0].ok and toolbox.queries[0].row_count == 1
+    assert toolbox.queries[0].columns == ("encounterclass",)
+    assert toolbox.queries[0].rows == (("wellness",),)
     assert ("sql", "SELECT encounterclass FROM encounters WHERE id = 'e2'") in toolbox.events
 
 
@@ -50,6 +52,7 @@ def test_run_sql_warns_when_rows_were_cut_off(toolbox):
     output = _tool(toolbox, "run_sql").invoke({"query": "SELECT id FROM encounters"})
     assert "Only the first 2 rows" in output
     assert toolbox.queries[0].truncated
+    assert len(toolbox.queries[0].rows) == 2
 
 
 def test_describe_table_merges_docs_and_handles_unknown_names(toolbox):

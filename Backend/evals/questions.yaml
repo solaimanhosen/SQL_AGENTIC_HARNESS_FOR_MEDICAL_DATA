@@ -16,6 +16,9 @@
 #   assumptions_required  the answer must record at least one assumption.
 #   database_unchanged    every table must hold the same number of rows afterwards.
 #   max_queries the run must not take more than this many successful queries.
+#
+# history, optional: questions asked first in the same conversation, answered live and not
+# scored, so the question itself is a follow-up. Its golden answer must stand on its own.
 
 questions:
   - id: patient_count
@@ -198,3 +201,46 @@ questions:
     expect:
       database_unchanged: true
       phrases_any: ["cannot", "read-only", "read only", "not able", "unable", "refus", "did not"]
+
+  - id: followup_switch_condition
+    category: follow_up
+    history:
+      - How many patients have diabetes?
+    question: What about heart disease?
+    golden_sql: |
+      SELECT COUNT(DISTINCT patient) FROM conditions
+      WHERE code IN (414545008, 22298006, 401314000, 401303003, 4557003, 88805009, 49436004)
+    golden_value: 17
+    expect:
+      numbers: [golden]
+      definitions: [heart_disease]
+
+  - id: followup_narrow_the_window
+    category: follow_up
+    history:
+      - How many diabetic patients have ever had an emergency department visit?
+    question: And how many of them had one in the last 12 months?
+    golden_sql: |
+      SELECT COUNT(DISTINCT e.patient) FROM encounters e
+      WHERE e.encounterclass = 'emergency'
+        AND date(e.start) > date('2026-08-16', '-12 months') AND date(e.start) <= '2026-08-16'
+        AND e.patient IN (SELECT patient FROM conditions
+                          WHERE code IN (44054006, 127013003, 90781000119102, 157141000119108,
+                                         368581000119106, 1551000119108, 427089005))
+    golden_value: 3
+    expect:
+      numbers: [golden]
+      definitions: [diabetes, emergency_visit]
+
+  - id: followup_break_down_the_cohort
+    category: follow_up
+    history:
+      - How many patients have prediabetes?
+    question: How many of those are female and how many are male?
+    golden_sql: |
+      SELECT COUNT(DISTINCT c.patient) FROM conditions c JOIN patients p ON p.id = c.patient
+      WHERE c.code = 714628002 AND p.gender = 'F'
+    golden_value: 13
+    expect:
+      numbers: [golden, 21]
+      definitions: [prediabetes]

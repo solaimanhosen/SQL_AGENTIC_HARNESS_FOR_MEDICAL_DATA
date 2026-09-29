@@ -1,14 +1,15 @@
 # Security review
 
 This document records what the agent is protected against, how each protection is proven,
-and what remains a risk. It covers the backend as it stands, running locally against a
-synthetic database.
+and what remains a risk. It covers the backend and its HTTP service as they stand, running
+against a synthetic database.
 
 ```bash
 cd Backend
 .venv/bin/python -m sql_agent.check_security          # run the attack catalogue
 .venv/bin/python -m pytest tests/test_security.py -q  # the same attacks, as tests
 RUN_LIVE_TESTS=1 .venv/bin/python -m pytest tests/test_agent_live.py -q   # prompt injection
+.venv/bin/python -m pytest tests/test_service.py tests/test_limits.py tests/test_serve.py -q   # the service
 ```
 
 ## What we are protecting
@@ -42,6 +43,11 @@ Four inputs are assumed hostile, whatever they look like:
 | Flooding the model's context | Results are capped in rows and characters, and the agent is told when rows were cut | Covered by the query layer tests |
 | An instruction hidden in the data | The agent is told that stored text is data and must be reported rather than obeyed | A live test against a database whose condition description tells the model to reply with a single word |
 | An answer that claims more than it checked | Findings must cite the queries behind them, and the run is compared with the answer afterwards | The traceability checks, scored on every evaluation question |
+| An earlier answer reused as evidence | A follow-up sees earlier answers with their citations stripped, query numbers restart per question, and stated figures must be re-queried | Offline tests of what a follow-up is sent, and three follow-up questions in the evaluation, all traceable |
+| Anyone who can reach the service using it | With `SQL_AGENT_API_TOKEN` set, every endpoint except health requires it as a bearer token, compared in constant time. Without a token the service refuses to listen beyond this machine | Tests for a missing, wrong and unprefixed token on every protected endpoint, and for the refusal to bind without one |
+| Cost as a denial of service | Before a question reaches the model: a limit on questions running at once, a token budget per UTC day, and a token budget per conversation. Runs still in progress hold a reservation, so a burst cannot overspend, and a run whose reader left still counts | Unit tests of the ledger, and service tests showing each limit refuses with a 429 before the model is called |
+| Oversized requests | Bodies over 16 KB are refused whether or not they declare their length, and a question is capped at 2,000 characters | Tests for a declared and an undeclared oversized body |
+| Untraceable use of the service | One line per request in `logs/requests.jsonl`: path, status, time, client address, whether it was authenticated and why it was refused. No bodies and no token | A test that a refusal is logged and the token never appears |
 
 ## Results
 
@@ -79,11 +85,20 @@ a sign the source text had been tampered with.
   small groups can still be narrow enough to identify someone. There is no minimum group
   size rule yet, which is worth discussing with Telligen.
 - **Run logs hold answers and SQL.** They are git-ignored and stay on the machine. With
-  real data they become sensitive files and need the same handling as the database.
-- **There is no authentication.** Anyone who can run the command can ask anything. A web
-  interface will need real access control, and that is a design question for that phase.
-- **Cost is a denial of service of its own.** Nothing limits how many questions may be
-  asked. A budget or a rate limit belongs with the web interface.
+  real data they become sensitive files and need the same handling as the database. The
+  request log holds client addresses, which are personal data in some jurisdictions.
+- **One shared token is not access control per person.** Everyone holding it looks the same,
+  so the log cannot say who asked what, and revoking one person means changing it for all.
+  It suits a demonstration. Real accounts are deferred until the rest of the plan is done.
+- **The token travels in the clear without TLS.** The service speaks plain HTTP. A deployed
+  instance must sit behind HTTPS, such as a reverse proxy or a platform's own front end.
+- **Limits and conversations live in memory.** A restart resets the day's spending and
+  forgets every conversation. With several server processes, each keeps its own ledger, so
+  the effective budget multiplies. One process is the supported deployment for now.
+- **The budget is counted in tokens, not money.** The figures in the evaluation give the
+  cost of a typical question. Set the daily budget with the model's current price in mind.
+- **Browser storage of the token is the interface's problem.** The web interface will need
+  to keep the token somewhere, and wherever that is becomes something to protect.
 
 ## Before this runs on real data
 
@@ -91,4 +106,5 @@ a sign the source text had been tampered with.
 2. Re-run the catalogue against the real database, since the blocked-column list is
    specific to the tables it names.
 3. Decide on a minimum group size for reported results.
-4. Add access control and a spending limit alongside the web interface.
+4. Replace the shared token with real accounts, serve over HTTPS, and review the daily
+   budget against the model's price.

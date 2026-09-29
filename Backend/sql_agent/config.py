@@ -27,6 +27,12 @@ DEFAULT_AS_OF = "latest"
 DEFAULT_MAX_ROWS = 200
 DEFAULT_QUERY_TIMEOUT = 15.0
 DEFAULT_LOG_PATH = "logs/runs.jsonl"
+DEFAULT_CORS_ORIGINS = "http://localhost:4200"
+DEFAULT_REQUEST_LOG_PATH = "logs/requests.jsonl"
+DEFAULT_MAX_CONCURRENT_RUNS = 4
+DEFAULT_DAILY_TOKEN_BUDGET = 5_000_000
+DEFAULT_CONVERSATION_TOKEN_BUDGET = 1_000_000
+MIN_API_TOKEN_CHARS = 32
 
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MAX_OUTPUT_TOKENS = 128_000
@@ -58,6 +64,16 @@ class Settings:
     log_path: Path | None
     """Where each run is appended as JSON, or None when logging is switched off."""
     refusal_fallback: bool
+    cors_origins: tuple[str, ...]
+    """Browser origins allowed to call the HTTP service, such as the Angular dev server."""
+    request_log_path: Path | None
+    """Where the service appends one line per HTTP request, or None when switched off."""
+    max_concurrent_runs: int
+    """Questions the service will answer at once. More are refused rather than queued."""
+    daily_token_budget: int
+    """Model tokens, input and output together, the service may spend per UTC day."""
+    conversation_token_budget: int
+    """Model tokens one conversation may spend, so a long conversation cannot run away."""
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -80,7 +96,41 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         query_timeout_seconds=_parse_float("SQL_AGENT_QUERY_TIMEOUT", env.get("SQL_AGENT_QUERY_TIMEOUT", str(DEFAULT_QUERY_TIMEOUT)), 0.1, 300.0),
         log_path=_parse_log_path(env.get("SQL_AGENT_LOG_PATH", DEFAULT_LOG_PATH)),
         refusal_fallback=_parse_bool("SQL_AGENT_REFUSAL_FALLBACK", env.get("SQL_AGENT_REFUSAL_FALLBACK", "true")),
+        cors_origins=_parse_origins(env.get("SQL_AGENT_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)),
+        request_log_path=_parse_log_path(env.get("SQL_AGENT_REQUEST_LOG_PATH", DEFAULT_REQUEST_LOG_PATH)),
+        max_concurrent_runs=_parse_int(
+            "SQL_AGENT_MAX_CONCURRENT_RUNS", env.get("SQL_AGENT_MAX_CONCURRENT_RUNS", str(DEFAULT_MAX_CONCURRENT_RUNS)), 1, 64
+        ),
+        daily_token_budget=_parse_int(
+            "SQL_AGENT_DAILY_TOKEN_BUDGET", env.get("SQL_AGENT_DAILY_TOKEN_BUDGET", str(DEFAULT_DAILY_TOKEN_BUDGET)), 100_000, 10**10
+        ),
+        conversation_token_budget=_parse_int(
+            "SQL_AGENT_CONVERSATION_TOKEN_BUDGET",
+            env.get("SQL_AGENT_CONVERSATION_TOKEN_BUDGET", str(DEFAULT_CONVERSATION_TOKEN_BUDGET)),
+            100_000,
+            10**10,
+        ),
     )
+
+
+def load_api_token(env: Mapping[str, str] | None = None) -> str | None:
+    """The shared token the HTTP service requires, or None when none is set.
+
+    Like the Anthropic key, it is kept out of Settings so printing or logging Settings can
+    never leak it.
+    """
+    if env is None:
+        load_dotenv(ENV_FILE, override=False)
+        env = os.environ
+    token = env.get("SQL_AGENT_API_TOKEN", "").strip()
+    if not token:
+        return None
+    if len(token) < MIN_API_TOKEN_CHARS:
+        raise ConfigError(
+            f"SQL_AGENT_API_TOKEN must be at least {MIN_API_TOKEN_CHARS} characters. "
+            'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(32))"'
+        )
+    return token
 
 
 def _parse_effort(raw: str) -> str:
@@ -144,3 +194,14 @@ def _parse_bool(name: str, raw: str) -> bool:
     if value in ("0", "false", "no", "off"):
         return False
     raise ConfigError(f"{name} must be true or false; got {raw!r}")
+
+
+def _parse_origins(raw: str) -> tuple[str, ...]:
+    """Comma-separated origins such as http://localhost:4200. A wildcard is refused."""
+    origins = tuple(part.strip().rstrip("/") for part in raw.split(",") if part.strip())
+    for origin in origins:
+        if origin == "*" or not origin.startswith(("http://", "https://")) or "/" in origin.split("://", 1)[1]:
+            raise ConfigError(
+                f"SQL_AGENT_CORS_ORIGINS must list origins such as http://localhost:4200; got {origin!r}"
+            )
+    return origins

@@ -48,6 +48,8 @@ class EvalCase:
     golden_sql: str | None = None
     golden_value: object = None
     expect: dict = field(default_factory=dict)
+    history: tuple[str, ...] = ()
+    """Questions asked first, in the same conversation, so the scored one is a follow-up."""
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,14 @@ class CaseResult:
     error: str | None = None
     unavailable: bool = False
     """True when the model could not be reached at all, so the agent was never tested."""
+    history_results: tuple[AgentResult, ...] = ()
+    """The answers to the earlier questions of a follow-up case. They are not scored."""
+
+    @property
+    def tokens(self) -> tuple[int, int]:
+        """Input and output tokens for the whole case, earlier questions included."""
+        runs = [*self.history_results, *([self.result] if self.result else [])]
+        return sum(run.input_tokens for run in runs), sum(run.output_tokens for run in runs)
 
     @property
     def passed(self) -> bool:
@@ -90,6 +100,7 @@ def load_cases(path: Path = DEFAULT_QUESTIONS_PATH) -> list[EvalCase]:
             golden_sql=(entry.get("golden_sql") or "").strip() or None,
             golden_value=entry.get("golden_value"),
             expect=dict(entry.get("expect") or {}),
+            history=tuple(question.strip() for question in entry.get("history") or ()),
         )
         for entry in document.get("questions", [])
     ]
@@ -265,13 +276,14 @@ class EvalReport:
             },
             "dimensions": {name: list(counts) for name, counts in self.dimension_totals().items()},
             "elapsed_s": round(self.elapsed_s, 1),
-            "input_tokens": sum(case.result.input_tokens for case in self.results if case.result),
-            "output_tokens": sum(case.result.output_tokens for case in self.results if case.result),
+            "input_tokens": sum(case.tokens[0] for case in self.results),
+            "output_tokens": sum(case.tokens[1] for case in self.results),
             "cases": [
                 {
                     "id": case.case.id,
                     "category": case.case.category,
                     "question": case.case.question,
+                    "history": list(case.case.history),
                     "passed": case.passed,
                     "unavailable": case.unavailable,
                     "error": case.error,
@@ -283,8 +295,8 @@ class EvalReport:
                     if case.result and case.result.structured
                     else None,
                     "elapsed_s": round(case.result.elapsed_s, 1) if case.result else None,
-                    "input_tokens": case.result.input_tokens if case.result else 0,
-                    "output_tokens": case.result.output_tokens if case.result else 0,
+                    "input_tokens": case.tokens[0],
+                    "output_tokens": case.tokens[1],
                 }
                 for case in self.results
             ],
@@ -318,14 +330,18 @@ def run_evaluation(
     results = []
     for case in cases:
         before = fingerprint(db) if case.expect.get("database_unchanged") else {}
+        earlier: list[AgentResult] = []
         try:
-            answer = agent.answer(case.question)
+            for question in case.history:
+                earlier.append(agent.answer(question, history=[run.as_turn() for run in earlier]))
+            answer = agent.answer(case.question, history=[run.as_turn() for run in earlier])
             checks = score_case(case, answer, db, before)
-            case_result = CaseResult(case=case, checks=tuple(checks), result=answer)
+            case_result = CaseResult(case=case, checks=tuple(checks), result=answer, history_results=tuple(earlier))
         except Exception as exc:  # a crash is a failure, not a reason to stop the run
             case_result = CaseResult(
                 case=case,
                 checks=(),
+                history_results=tuple(earlier),
                 error=f"{type(exc).__name__}: {exc}",
                 # An API problem such as an expired key, no credit or a rate limit says
                 # nothing about the agent, so it must not be scored as a wrong answer.

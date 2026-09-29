@@ -3,6 +3,43 @@
 Notable changes to this project, newest first. Versions follow the project milestones:
 v1 is the backend, v2 will add the web interface.
 
+## v1.1.0 — 28 September 2026
+
+The backend becomes a service the web interface can call. It adds an HTTP API over the same
+agent, follow-up questions, live steps, and the access and spending controls a shared
+instance needs.
+
+### Added
+
+- An HTTP service over `SqlAgent.answer`, run with `python -m sql_agent.serve`. It has
+  endpoints for asking a question, health, the schema catalog and the definitions. Answers
+  carry definition statuses and window dates from our own records, and each query carries
+  its rows.
+- Each recorded query keeps the rows it returned, so the interface can show the evidence.
+  The run log still leaves the rows out.
+- `SQL_AGENT_CORS_ORIGINS` limits which browser origins may call the service.
+- Follow-up questions. `SqlAgent.answer` takes the earlier turns of a conversation, and the
+  service keeps them in memory by conversation id. Earlier answers are context, not
+  evidence: query numbers restart with each question and cited figures must be re-queried.
+- `/api/ask/stream` sends each step as a server-sent event while the agent works, then the
+  answer.
+- Three follow-up questions in the evaluation set, asked after an earlier question in the
+  same conversation.
+- Service hardening:
+  - a shared bearer token, `SQL_AGENT_API_TOKEN`, required on every endpoint except health.
+    Without one, the service refuses to listen beyond this machine;
+  - limits on questions running at once, on tokens per UTC day and on tokens per
+    conversation, applied before the model is called. `/api/usage` reports them;
+  - a 16 KB cap on request bodies;
+  - one line per request in `logs/requests.jsonl`, refusals included.
+
+### Changed
+
+- The command line and the service share one wording for failures.
+- The run log records the conversation id and the earlier questions of a follow-up.
+- The live prompt injection test checks that the agent does not obey an instruction hidden
+  in the data, rather than that it never mentions the instruction.
+
 ## v1.0.0 — 23 September 2026
 
 The backend is complete. A question asked in plain language becomes an explained answer,

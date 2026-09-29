@@ -15,13 +15,16 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .agent import AgentResult
+    from .tools import QueryRecord
 
 
-def build_record(result: "AgentResult") -> dict:
+def build_record(result: "AgentResult", *, conversation_id: str | None = None) -> dict:
     """The full run as plain data, safe to serialise and to diff."""
     structured = result.structured
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "conversation_id": conversation_id,
+        "previous_questions": [turn.question for turn in result.history],
         "question": result.question,
         "answer": result.answer,
         "headline": structured.headline if structured else None,
@@ -38,7 +41,7 @@ def build_record(result: "AgentResult") -> dict:
         ),
         "assumptions": list(structured.assumptions) if structured else [],
         "caveats": list(structured.caveats) if structured else [],
-        "queries": [asdict(record) for record in result.queries],
+        "queries": [_query_record(record) for record in result.queries],
         "issues": asdict(result.issues),
         "as_of": str(result.as_of),
         "model": result.model,
@@ -48,9 +51,17 @@ def build_record(result: "AgentResult") -> dict:
     }
 
 
-def log_run(result: "AgentResult", path: Path) -> Path:
+def _query_record(record: "QueryRecord") -> dict:
+    """A query without its rows. The log records what ran, not a copy of the data."""
+    data = asdict(record)
+    del data["rows"]
+    return data
+
+
+def log_run(result: "AgentResult", path: Path, *, conversation_id: str | None = None) -> Path:
     """Append one run to the log, creating the folder if needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    record = build_record(result, conversation_id=conversation_id)
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(build_record(result), ensure_ascii=False) + "\n")
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     return path

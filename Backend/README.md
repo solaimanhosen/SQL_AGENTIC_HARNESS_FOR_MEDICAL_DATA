@@ -61,6 +61,77 @@ Every run is appended to `logs/runs.jsonl`, which is git-ignored. The log holds 
 question, the answer, every query and what the run cost, and it is the raw material for the
 evaluation harness. Set `SQL_AGENT_LOG_PATH=off` or pass `--no-log` to switch it off.
 
+## Running the service
+
+The web interface calls an HTTP service that wraps the same `SqlAgent.answer` method the
+command line uses, so the two cannot drift apart.
+
+```bash
+.venv/bin/python -m sql_agent.serve                  # http://127.0.0.1:8000, docs at /docs
+curl -s localhost:8000/api/health
+curl -s -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \
+     -d '{"question": "How many patients have diabetes?"}'
+```
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/health` | Whether the database is readable, the model and the as-of date. No model call. |
+| GET | `/api/schema` | The documented tables and columns. Identity columns never appear. |
+| GET | `/api/definitions` | Every shared definition with its confirmation status. |
+| GET | `/api/usage` | Questions running now and tokens spent today against the daily budget. |
+| POST | `/api/ask` | The answer, its findings, the SQL with its rows, and any traceability warnings. |
+| POST | `/api/ask/stream` | The same answer, preceded by each step as it happens, as server-sent events. |
+
+The answer carries the same parts the command line prints, filled in from our own records:
+each definition's status comes from the semantic layer, and the window dates are computed
+here. Each query comes with the rows it returned, capped at the row limit, so the interface
+can show the evidence. The rows are not written to the run log.
+
+Every answer belongs to a conversation. Send the `conversation_id` from one answer with the
+next question, and a follow-up such as "what about heart disease?" is understood. The agent
+sees the last six questions with their answers and SQL as context. Query numbers start
+again at 1 for each question, and a figure from an earlier answer must be queried again
+before it is stated, so every citation still points at SQL that ran for this question.
+Conversations are held in memory and a restart forgets them. One question at a time may be
+answered in a conversation. A second one asked meanwhile gets a 409.
+
+```bash
+curl -sN -X POST localhost:8000/api/ask/stream -H 'Content-Type: application/json' \
+     -d '{"question": "What about heart disease?", "conversation_id": "<id from the last answer>"}'
+```
+
+The stream sends a `conversation` event first, then a `step` event for each query, table
+lookup and definition lookup, then either `answer`, with the same body `/api/ask` returns,
+or `error`. It is a POST, so a browser reads it with `fetch` rather than `EventSource`.
+A question keeps running if the reader disconnects, so its answer still reaches the log and
+the conversation.
+
+Errors come back as `{"error": kind, "message": text}`. A question the agent could not
+answer is a 422, and a failure at the Anthropic API is a 502 or 503. An unknown or expired
+conversation is a 404. The agent runs in a worker thread, so a slow question does not
+block other requests.
+
+### Access and limits
+
+Set `SQL_AGENT_API_TOKEN` in `Backend/.env` to require a shared token on every endpoint
+except health. Clients send `Authorization: Bearer <token>`. Without a token the service is
+open, so `serve` refuses a `--host` other than this machine. Generate a token with:
+
+```bash
+.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+A question is refused with a 429, before the model is called, when:
+- too many are already running (`too_many_runs`, with a `Retry-After` header);
+- the day's token budget is spent (`daily_budget`), reset at midnight UTC;
+- the conversation's token budget is spent (`conversation_budget`), so start a new one.
+
+A question still running counts against both budgets with a 60,000 token reservation until
+it finishes. Request bodies over 16 KB get a 413. Every request, including a refused one, is
+appended to `logs/requests.jsonl` without its body or token. Only the origins in
+`SQL_AGENT_CORS_ORIGINS` may call the service from a browser. The limits and conversations
+live in memory, so run one server process. See `docs/security.md` for what remains a risk.
+
 ## The semantic layer
 
 Shared definitions such as which codes count as diabetes live in
@@ -161,6 +232,12 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `SQL_AGENT_LOG_PATH` | `logs/runs.jsonl` | Where runs are logged. `off` disables logging. |
 | `SQL_AGENT_AS_OF_DATE` | `latest` | Anchor for "last N months": `latest`, `today` or `YYYY-MM-DD`. |
 | `SQL_AGENT_REFUSAL_FALLBACK` | `true` | Retry a declined request on a fallback model in the same call. |
+| `SQL_AGENT_CORS_ORIGINS` | `http://localhost:4200` | Comma-separated browser origins allowed to call the service. |
+| `SQL_AGENT_API_TOKEN` | none | Shared bearer token for the service, at least 32 characters. Never commit it. |
+| `SQL_AGENT_MAX_CONCURRENT_RUNS` | `4` | Questions the service answers at once. More are refused. |
+| `SQL_AGENT_DAILY_TOKEN_BUDGET` | `5000000` | Model tokens the service may spend per UTC day. |
+| `SQL_AGENT_CONVERSATION_TOKEN_BUDGET` | `1000000` | Model tokens one conversation may spend. |
+| `SQL_AGENT_REQUEST_LOG_PATH` | `logs/requests.jsonl` | Where each HTTP request is logged. `off` disables it. |
 
 ## Layout
 
@@ -170,6 +247,11 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/llm.py` | Builds the Claude chat model. |
 | `sql_agent/check_setup.py` | Setup check script. |
 | `main.py` | Command line entry point for asking a question. |
+| `sql_agent/service.py` | The HTTP service, a thin layer over the agent. |
+| `sql_agent/serve.py` | Runs the service. |
+| `sql_agent/conversations.py` | Holds each conversation's recent turns for follow-up questions. |
+| `sql_agent/limits.py` | Concurrency and token budgets for the service. |
+| `sql_agent/requestlog.py` | Logs each HTTP request. |
 | `sql_agent/agent.py` | The agent loop, and the reusable core a web service will call. |
 | `sql_agent/answer.py` | The shape of an answer, its rendering and its self-checks. |
 | `sql_agent/runlog.py` | Appends each run to the log. |

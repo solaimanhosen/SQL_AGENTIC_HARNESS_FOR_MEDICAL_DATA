@@ -20,7 +20,7 @@ def _result() -> AgentResult:
         ),
         issues=AnswerIssues(unknown_definitions=("made_up",)),
         queries=(
-            QueryRecord(sql="SELECT 1", number=1, row_count=1, elapsed_ms=2.0),
+            QueryRecord(sql="SELECT 1", number=1, row_count=1, elapsed_ms=2.0, columns=("n",), rows=((1,),)),
             QueryRecord(sql="DROP TABLE x", error="UnsafeQueryError: nope"),
         ),
         as_of=date(2026, 8, 16),
@@ -43,6 +43,12 @@ def test_record_holds_everything_needed_to_review_a_run():
     assert record["issues"]["unknown_definitions"] == ("made_up",)
     assert record["elapsed_s"] == 3.46
     assert record["timestamp"].endswith("+00:00")
+
+
+def test_record_keeps_the_query_but_not_its_rows():
+    query = build_record(_result())["queries"][0]
+    assert query["columns"] == ("n",) and query["row_count"] == 1
+    assert "rows" not in query
 
 
 def test_log_appends_one_json_line_per_run(tmp_path):
