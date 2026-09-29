@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .agent import AgentResult
+    from .tools import QueryRecord
 
 
 def build_record(result: "AgentResult") -> dict:
@@ -38,7 +39,7 @@ def build_record(result: "AgentResult") -> dict:
         ),
         "assumptions": list(structured.assumptions) if structured else [],
         "caveats": list(structured.caveats) if structured else [],
-        "queries": [asdict(record) for record in result.queries],
+        "queries": [_query_record(record) for record in result.queries],
         "issues": asdict(result.issues),
         "as_of": str(result.as_of),
         "model": result.model,
@@ -46,6 +47,13 @@ def build_record(result: "AgentResult") -> dict:
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
     }
+
+
+def _query_record(record: "QueryRecord") -> dict:
+    """A query without its rows. The log records what ran, not a copy of the data."""
+    data = asdict(record)
+    del data["rows"]
+    return data
 
 
 def log_run(result: "AgentResult", path: Path) -> Path:

@@ -31,6 +31,9 @@ class QueryRecord:
     elapsed_ms: float | None = None
     truncated: bool = False
     error: str | None = None
+    columns: tuple[str, ...] = ()
+    rows: tuple[tuple, ...] = ()
+    """The rows returned, already capped at the row limit, so the evidence can be shown."""
 
     @property
     def ok(self) -> bool:
@@ -83,6 +86,8 @@ class ToolBox:
                     row_count=result.row_count,
                     elapsed_ms=result.elapsed_ms,
                     truncated=result.truncated,
+                    columns=result.columns,
+                    rows=result.rows,
                 )
             )
             self._announce("sql_result", f"{result.row_count} rows in {result.elapsed_ms:.0f} ms")

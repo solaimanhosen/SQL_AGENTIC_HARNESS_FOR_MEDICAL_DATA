@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
+import anthropic
 from langchain.agents import create_agent
 from langgraph.errors import GraphRecursionError
 
@@ -28,6 +29,23 @@ DEFAULT_MAX_STEPS = 30
 
 class AgentError(RuntimeError):
     """The agent could not produce an answer."""
+
+
+def describe_failure(exc: BaseException) -> tuple[str, str] | None:
+    """A kind and a message for a failure worth explaining, or None for anything else.
+
+    The command line and the HTTP service both use this, so a failure reads the same in
+    each. The kinds are agent, auth, api and connection.
+    """
+    if isinstance(exc, AgentError):
+        return "agent", str(exc)
+    if isinstance(exc, anthropic.AuthenticationError):
+        return "auth", "The API key was rejected. Check ANTHROPIC_API_KEY in Backend/.env."
+    if isinstance(exc, anthropic.APIStatusError):
+        return "api", f"The Anthropic API returned an error: {exc.message}"
+    if isinstance(exc, anthropic.APIConnectionError):
+        return "connection", "Could not reach the Anthropic API. Check the network connection."
+    return None
 
 
 @dataclass(frozen=True)

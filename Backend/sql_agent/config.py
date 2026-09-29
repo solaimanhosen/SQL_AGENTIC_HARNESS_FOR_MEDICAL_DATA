@@ -27,6 +27,7 @@ DEFAULT_AS_OF = "latest"
 DEFAULT_MAX_ROWS = 200
 DEFAULT_QUERY_TIMEOUT = 15.0
 DEFAULT_LOG_PATH = "logs/runs.jsonl"
+DEFAULT_CORS_ORIGINS = "http://localhost:4200"
 
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MAX_OUTPUT_TOKENS = 128_000
@@ -58,6 +59,8 @@ class Settings:
     log_path: Path | None
     """Where each run is appended as JSON, or None when logging is switched off."""
     refusal_fallback: bool
+    cors_origins: tuple[str, ...]
+    """Browser origins allowed to call the HTTP service, such as the Angular dev server."""
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -80,6 +83,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         query_timeout_seconds=_parse_float("SQL_AGENT_QUERY_TIMEOUT", env.get("SQL_AGENT_QUERY_TIMEOUT", str(DEFAULT_QUERY_TIMEOUT)), 0.1, 300.0),
         log_path=_parse_log_path(env.get("SQL_AGENT_LOG_PATH", DEFAULT_LOG_PATH)),
         refusal_fallback=_parse_bool("SQL_AGENT_REFUSAL_FALLBACK", env.get("SQL_AGENT_REFUSAL_FALLBACK", "true")),
+        cors_origins=_parse_origins(env.get("SQL_AGENT_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)),
     )
 
 
@@ -144,3 +148,14 @@ def _parse_bool(name: str, raw: str) -> bool:
     if value in ("0", "false", "no", "off"):
         return False
     raise ConfigError(f"{name} must be true or false; got {raw!r}")
+
+
+def _parse_origins(raw: str) -> tuple[str, ...]:
+    """Comma-separated origins such as http://localhost:4200. A wildcard is refused."""
+    origins = tuple(part.strip().rstrip("/") for part in raw.split(",") if part.strip())
+    for origin in origins:
+        if origin == "*" or not origin.startswith(("http://", "https://")) or "/" in origin.split("://", 1)[1]:
+            raise ConfigError(
+                f"SQL_AGENT_CORS_ORIGINS must list origins such as http://localhost:4200; got {origin!r}"
+            )
+    return origins

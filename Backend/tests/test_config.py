@@ -58,6 +58,12 @@ def test_query_limits_can_be_tuned():
     assert (s.max_rows, s.query_timeout_seconds) == (50, 2.5)
 
 
+def test_cors_origins_default_to_the_angular_dev_server_and_can_be_listed():
+    assert load_settings({}).cors_origins == ("http://localhost:4200",)
+    s = load_settings({"SQL_AGENT_CORS_ORIGINS": " http://localhost:4200/, https://demo.example.org "})
+    assert s.cors_origins == ("http://localhost:4200", "https://demo.example.org")
+
+
 def test_csv_dir_override(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert load_settings({"SQL_AGENT_CSV_DIR": "data/other"}).csv_dir == BACKEND_DIR / "data" / "other"
@@ -84,6 +90,9 @@ def test_absolute_db_path_is_kept(tmp_path):
         ("SQL_AGENT_QUERY_TIMEOUT", "600"),
         ("SQL_AGENT_QUERY_TIMEOUT", "soon"),
         ("SQL_AGENT_REFUSAL_FALLBACK", "maybe"),
+        ("SQL_AGENT_CORS_ORIGINS", "*"),
+        ("SQL_AGENT_CORS_ORIGINS", "localhost:4200"),
+        ("SQL_AGENT_CORS_ORIGINS", "http://localhost:4200/app"),
     ],
 )
 def test_invalid_values_raise_with_variable_name(name, value):

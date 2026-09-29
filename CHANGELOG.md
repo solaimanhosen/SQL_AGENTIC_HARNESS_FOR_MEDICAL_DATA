@@ -3,6 +3,24 @@
 Notable changes to this project, newest first. Versions follow the project milestones:
 v1 is the backend, v2 will add the web interface.
 
+## Unreleased
+
+### Added
+
+- An HTTP service over `SqlAgent.answer`, run with `python -m sql_agent.serve`. It has
+  endpoints for asking a question, health, the schema catalog and the definitions. Answers
+  carry definition statuses and window dates from our own records, and each query carries
+  its rows.
+- Each recorded query keeps the rows it returned, so the interface can show the evidence.
+  The run log still leaves the rows out.
+- `SQL_AGENT_CORS_ORIGINS` limits which browser origins may call the service.
+
+### Changed
+
+- The command line and the service share one wording for failures.
+- The live prompt injection test checks that the agent does not obey an instruction hidden
+  in the data, rather than that it never mentions the instruction.
+
 ## v1.0.0 — 23 September 2026
 
 The backend is complete. A question asked in plain language becomes an explained answer,

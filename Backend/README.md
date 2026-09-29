@@ -61,6 +61,37 @@ Every run is appended to `logs/runs.jsonl`, which is git-ignored. The log holds 
 question, the answer, every query and what the run cost, and it is the raw material for the
 evaluation harness. Set `SQL_AGENT_LOG_PATH=off` or pass `--no-log` to switch it off.
 
+## Running the service
+
+The web interface calls an HTTP service that wraps the same `SqlAgent.answer` method the
+command line uses, so the two cannot drift apart.
+
+```bash
+.venv/bin/python -m sql_agent.serve                  # http://127.0.0.1:8000, docs at /docs
+curl -s localhost:8000/api/health
+curl -s -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \
+     -d '{"question": "How many patients have diabetes?"}'
+```
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/health` | Whether the database is readable, the model and the as-of date. No model call. |
+| GET | `/api/schema` | The documented tables and columns. Identity columns never appear. |
+| GET | `/api/definitions` | Every shared definition with its confirmation status. |
+| POST | `/api/ask` | The answer, its findings, the SQL with its rows, and any traceability warnings. |
+
+The answer carries the same parts the command line prints, filled in from our own records:
+each definition's status comes from the semantic layer, and the window dates are computed
+here. Each query comes with the rows it returned, capped at the row limit, so the interface
+can show the evidence. The rows are not written to the run log.
+
+Errors come back as `{"error": kind, "message": text}`. A question the agent could not
+answer is a 422, and a failure at the Anthropic API is a 502 or 503. The agent runs in a
+worker thread, so a slow question does not block other requests.
+
+The service has no access control yet and listens on this machine only. Only the origins in
+`SQL_AGENT_CORS_ORIGINS` may call it from a browser.
+
 ## The semantic layer
 
 Shared definitions such as which codes count as diabetes live in
@@ -161,6 +192,7 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `SQL_AGENT_LOG_PATH` | `logs/runs.jsonl` | Where runs are logged. `off` disables logging. |
 | `SQL_AGENT_AS_OF_DATE` | `latest` | Anchor for "last N months": `latest`, `today` or `YYYY-MM-DD`. |
 | `SQL_AGENT_REFUSAL_FALLBACK` | `true` | Retry a declined request on a fallback model in the same call. |
+| `SQL_AGENT_CORS_ORIGINS` | `http://localhost:4200` | Comma-separated browser origins allowed to call the service. |
 
 ## Layout
 
@@ -170,6 +202,8 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/llm.py` | Builds the Claude chat model. |
 | `sql_agent/check_setup.py` | Setup check script. |
 | `main.py` | Command line entry point for asking a question. |
+| `sql_agent/service.py` | The HTTP service, a thin layer over the agent. |
+| `sql_agent/serve.py` | Runs the service. |
 | `sql_agent/agent.py` | The agent loop, and the reusable core a web service will call. |
 | `sql_agent/answer.py` | The shape of an answer, its rendering and its self-checks. |
 | `sql_agent/runlog.py` | Appends each run to the log. |

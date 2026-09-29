@@ -17,7 +17,7 @@ import sys
 
 import anthropic
 
-from sql_agent.agent import AgentError, AgentResult, SqlAgent
+from sql_agent.agent import AgentError, AgentResult, SqlAgent, describe_failure
 from sql_agent.config import ConfigError
 from sql_agent.runlog import build_record, log_run
 
@@ -99,17 +99,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = agent.answer(args.question, on_event=print_event if args.verbose and not args.json else None)
-    except AgentError as exc:
-        print(f"\n{exc}", file=sys.stderr)
-        return 1
-    except anthropic.AuthenticationError:
-        print("\nThe API key was rejected. Check ANTHROPIC_API_KEY in Backend/.env.", file=sys.stderr)
-        return 1
-    except anthropic.APIStatusError as exc:
-        print(f"\nThe Anthropic API returned an error: {exc.message}", file=sys.stderr)
-        return 1
-    except anthropic.APIConnectionError:
-        print("\nCould not reach the Anthropic API. Check the network connection.", file=sys.stderr)
+    except (AgentError, anthropic.APIError) as exc:
+        failure = describe_failure(exc)
+        if failure is None:
+            raise
+        print(f"\n{failure[1]}", file=sys.stderr)
         return 1
 
     log_path = agent.settings.log_path
