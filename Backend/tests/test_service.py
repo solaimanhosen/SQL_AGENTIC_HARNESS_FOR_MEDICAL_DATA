@@ -11,6 +11,7 @@ from sql_agent.agent import AgentError, AgentResult
 from sql_agent.answer import AnswerIssues, Finding, StructuredAnswer, TimeWindow
 from sql_agent.config import load_settings
 from sql_agent.conversations import ConversationStore
+from sql_agent.limits import SpendingLimits
 from sql_agent.db import ReadOnlyDatabase
 from sql_agent.semantic import load_semantic_layer
 from sql_agent.service import MAX_QUESTION_CHARS, create_app
@@ -76,7 +77,12 @@ class StubAgent:
 
 @pytest.fixture
 def settings(sample_db_path, tmp_path):
-    return dataclasses.replace(load_settings({}), db_path=sample_db_path, log_path=tmp_path / "runs.jsonl")
+    return dataclasses.replace(
+        load_settings({}),
+        db_path=sample_db_path,
+        log_path=tmp_path / "runs.jsonl",
+        request_log_path=tmp_path / "requests.jsonl",
+    )
 
 
 @pytest.fixture
@@ -84,9 +90,9 @@ def db(sample_db_path):
     return ReadOnlyDatabase(sample_db_path, max_rows=10, timeout_seconds=5)
 
 
-def _client(settings, db, *, conversations=None, **kwargs):
+def _client(settings, db, *, conversations=None, limits=None, api_token=None, **kwargs):
     agent = StubAgent(settings, db, **kwargs)
-    return TestClient(create_app(agent, conversations)), agent
+    return TestClient(create_app(agent, conversations, limits=limits, api_token=api_token)), agent
 
 
 def _events(response):
@@ -319,19 +325,141 @@ def test_the_stream_refuses_an_unknown_conversation_before_it_starts(settings, d
 def test_a_run_whose_reader_never_arrives_still_finishes_and_frees_the_conversation(settings, db):
     import asyncio
 
-    from sql_agent.service import _start
+    from sql_agent.service import _claim, _start
 
     store = ConversationStore()
+    limits = SpendingLimits.from_settings(settings)
     agent = StubAgent(settings, db)
 
     async def ask_and_walk_away():
         background = set()
-        conversation_id, history, turn = store.begin(None)
-        _start(agent, store, conversation_id, history, turn, "How many have diabetes?", background)
+        claim = _claim(store, limits, None)
+        _start(agent, store, limits, claim, "How many have diabetes?", background)
         await asyncio.gather(*background)
-        return conversation_id
+        return claim.conversation_id
 
     conversation_id = asyncio.run(ask_and_walk_away())
     _, history, turn = store.begin(conversation_id)
     assert turn == 2 and history[0].question == "How many have diabetes?"
     assert json.loads(settings.log_path.read_text())["conversation_id"] == conversation_id
+    assert limits.usage()["running"] == 0 and limits.usage()["spent_today"] == 1350
+
+
+TOKEN = "a-shared-token-that-is-long-enough-to-pass"
+AUTH = {"Authorization": f"Bearer {TOKEN}"}
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [("get", "/api/schema"), ("get", "/api/definitions"), ("get", "/api/usage"), ("post", "/api/ask"), ("post", "/api/ask/stream")],
+)
+def test_with_a_token_configured_every_endpoint_but_health_requires_it(settings, db, method, path):
+    client, agent = _client(settings, db, api_token=TOKEN)
+    kwargs = {"json": {"question": "q"}} if method == "post" else {}
+    for headers in ({}, {"Authorization": "Bearer wrong"}, {"Authorization": TOKEN}):
+        response = getattr(client, method)(path, headers=headers, **kwargs)
+        assert response.status_code == 401, headers
+        assert response.json()["error"] == "unauthorized"
+        assert response.headers["www-authenticate"] == "Bearer"
+    assert agent.questions == []
+    assert getattr(client, method)(path, headers=AUTH, **kwargs).status_code == 200
+
+
+def test_health_stays_open_so_a_monitor_needs_no_secret(settings, db):
+    client, _ = _client(settings, db, api_token=TOKEN)
+    assert client.get("/api/health").status_code == 200
+
+
+def test_without_a_token_configured_the_service_is_open_for_local_development(settings, db):
+    client, _ = _client(settings, db)
+    assert client.post("/api/ask", json={"question": "q"}).status_code == 200
+
+
+def test_the_browser_preflight_needs_no_token(settings, db):
+    client, _ = _client(settings, db, api_token=TOKEN)
+    response = client.options(
+        "/api/ask",
+        headers={
+            "Origin": "http://localhost:4200",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert "authorization" in response.headers["access-control-allow-headers"].lower()
+
+
+def test_an_oversized_body_is_refused_before_it_is_parsed(settings, db):
+    client, agent = _client(settings, db)
+    response = client.post("/api/ask", content=json.dumps({"question": "x" * 20_000}), headers={"Content-Type": "application/json"})
+    assert response.status_code == 413 and response.json()["error"] == "too_large"
+    assert agent.questions == []
+
+
+def test_too_many_questions_at_once_are_refused_with_a_retry_hint(settings, db):
+    limits = SpendingLimits(max_concurrent_runs=1, daily_token_budget=10**6, conversation_token_budget=10**6)
+    limits.reserve("someone-else")
+    client, agent = _client(settings, db, limits=limits)
+    for path in ("/api/ask", "/api/ask/stream"):
+        response = client.post(path, json={"question": "q"})
+        assert response.status_code == 429 and response.json()["error"] == "too_many_runs"
+        assert response.headers["retry-after"] == "10"
+    assert agent.questions == []
+
+
+def test_a_spent_daily_budget_refuses_questions_before_the_model_is_called(settings, db):
+    limits = SpendingLimits(max_concurrent_runs=4, daily_token_budget=100_000, conversation_token_budget=10**6, reserve_tokens=60_000)
+    client, agent = _client(settings, db, limits=limits)
+    assert client.post("/api/ask", json={"question": "first"}).status_code == 200
+    limits.settle(limits.reserve("elsewhere"), 50_000)
+    response = client.post("/api/ask", json={"question": "second"})
+    assert response.status_code == 429 and response.json()["error"] == "daily_budget"
+    assert agent.questions == ["first"]
+
+
+def test_a_refused_follow_up_leaves_the_conversation_free(settings, db):
+    store = ConversationStore()
+    limits = SpendingLimits(max_concurrent_runs=4, daily_token_budget=10**6, conversation_token_budget=61_000, reserve_tokens=60_000)
+    client, _ = _client(settings, db, conversations=store, limits=limits)
+    first = client.post("/api/ask", json={"question": "first"}).json()
+    conversation_id = first["conversation_id"]
+    response = client.post("/api/ask", json={"question": "second", "conversation_id": conversation_id})
+    assert response.status_code == 429 and response.json()["error"] == "conversation_budget"
+    _, history, turn = store.begin(conversation_id)
+    assert turn == 2 and len(history) == 1
+    assert client.post("/api/ask", json={"question": "a new conversation"}).status_code == 200
+
+
+def test_usage_reports_what_answered_questions_spent(settings, db):
+    client, _ = _client(settings, db)
+    client.post("/api/ask", json={"question": "q"})
+    usage = client.get("/api/usage").json()
+    assert usage["spent_today"] == 1350 and usage["running"] == 0 and usage["reserved_today"] == 0
+
+
+def test_every_request_is_logged_including_refusals_and_never_the_token(settings, db):
+    client, _ = _client(settings, db, api_token=TOKEN)
+    client.get("/api/health")
+    client.post("/api/ask", json={"question": "q"})
+    client.post("/api/ask", json={"question": "q"}, headers=AUTH)
+    text = settings.request_log_path.read_text()
+    assert TOKEN not in text
+    health, refused, answered = [json.loads(line) for line in text.splitlines()]
+    assert (health["path"], health["status"], health["authenticated"]) == ("/api/health", 200, False)
+    assert (refused["status"], refused["refused"], refused["authenticated"]) == (401, "unauthorized", False)
+    assert (answered["path"], answered["status"], answered["authenticated"], answered["refused"]) == ("/api/ask", 200, True, None)
+    assert answered["elapsed_ms"] >= 0 and answered["method"] == "POST"
+
+
+def test_a_body_that_hides_its_length_is_still_cut_off(settings, db):
+    client, agent = _client(settings, db)
+
+    def chunks():
+        yield b'{"question": "'
+        for _ in range(40):
+            yield b"x" * 1_000
+        yield b'"}'
+
+    response = client.post("/api/ask", content=chunks(), headers={"Content-Type": "application/json"})
+    assert response.status_code == 413 and response.json()["error"] == "too_large"
+    assert agent.questions == []

@@ -1,6 +1,6 @@
 import pytest
 
-from sql_agent.config import BACKEND_DIR, ConfigError, load_settings
+from sql_agent.config import BACKEND_DIR, ConfigError, load_api_token, load_settings
 
 
 def test_defaults():
@@ -91,6 +91,9 @@ def test_absolute_db_path_is_kept(tmp_path):
         ("SQL_AGENT_QUERY_TIMEOUT", "soon"),
         ("SQL_AGENT_REFUSAL_FALLBACK", "maybe"),
         ("SQL_AGENT_CORS_ORIGINS", "*"),
+        ("SQL_AGENT_MAX_CONCURRENT_RUNS", "0"),
+        ("SQL_AGENT_DAILY_TOKEN_BUDGET", "1000"),
+        ("SQL_AGENT_CONVERSATION_TOKEN_BUDGET", "lots"),
         ("SQL_AGENT_CORS_ORIGINS", "localhost:4200"),
         ("SQL_AGENT_CORS_ORIGINS", "http://localhost:4200/app"),
     ],
@@ -103,3 +106,20 @@ def test_invalid_values_raise_with_variable_name(name, value):
 def test_settings_never_hold_the_api_key():
     s = load_settings({"ANTHROPIC_API_KEY": "sk-ant-test-not-a-real-key"})
     assert "sk-ant-test-not-a-real-key" not in repr(s)
+
+
+def test_service_limits_have_defaults_and_can_be_tuned():
+    s = load_settings({})
+    assert (s.max_concurrent_runs, s.daily_token_budget, s.conversation_token_budget) == (4, 5_000_000, 1_000_000)
+    assert s.request_log_path == BACKEND_DIR / "logs" / "requests.jsonl"
+    s = load_settings({"SQL_AGENT_MAX_CONCURRENT_RUNS": "2", "SQL_AGENT_REQUEST_LOG_PATH": "off"})
+    assert s.max_concurrent_runs == 2 and s.request_log_path is None
+
+
+def test_the_api_token_is_optional_long_and_never_in_settings():
+    assert load_api_token({}) is None
+    token = "t" * 32
+    assert load_api_token({"SQL_AGENT_API_TOKEN": f" {token} "}) == token
+    with pytest.raises(ConfigError, match="SQL_AGENT_API_TOKEN"):
+        load_api_token({"SQL_AGENT_API_TOKEN": "short"})
+    assert token not in repr(load_settings({"SQL_AGENT_API_TOKEN": token}))

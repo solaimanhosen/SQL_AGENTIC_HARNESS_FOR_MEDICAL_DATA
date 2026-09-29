@@ -21,6 +21,13 @@ v1 is the backend, v2 will add the web interface.
   answer.
 - Three follow-up questions in the evaluation set, asked after an earlier question in the
   same conversation.
+- Service hardening:
+  - a shared bearer token, `SQL_AGENT_API_TOKEN`, required on every endpoint except health.
+    Without one, the service refuses to listen beyond this machine;
+  - limits on questions running at once, on tokens per UTC day and on tokens per
+    conversation, applied before the model is called. `/api/usage` reports them;
+  - a 16 KB cap on request bodies;
+  - one line per request in `logs/requests.jsonl`, refusals included.
 
 ### Changed
 

@@ -12,6 +12,10 @@ Run it from the Backend folder:
 The agent runs in a worker thread, so a slow question does not block health checks or
 other requests. Questions can belong to a conversation, so a follow-up such as "what about
 heart disease?" is understood, and `/api/ask/stream` sends each step as it happens.
+
+When a shared token is configured, every endpoint except health requires it. Request bodies
+are capped, and the limits in limits.py refuse a question before it reaches the model when
+too many are running or a token budget is spent.
 """
 
 from __future__ import annotations
@@ -19,26 +23,37 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
 
 import anthropic
 import anyio
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.datastructures import Headers
+from starlette.middleware.body_limit import RequestBodyLimitMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .agent import AgentError, AgentResult, SqlAgent, Turn, describe_failure
 from .answer import describe_window
 from .conversations import ConversationBusy, ConversationStore, UnknownConversation
+from .limits import LimitExceeded, Reservation, SpendingLimits
+from .requestlog import RequestLogMiddleware
 from .runlog import log_run
 from .semantic import SemanticLayer, window_bounds
 from .tools import QueryRecord
 
 MAX_QUESTION_CHARS = 2_000
+# A question of the longest allowed length, in any script, fits well inside this.
+MAX_BODY_BYTES = 16 * 1024
 CONVERSATION_ID_PATTERN = r"^[0-9a-f]{32}$"
 
 logger = logging.getLogger(__name__)
@@ -150,27 +165,72 @@ class ErrorOut(BaseModel):
     message: str
 
 
-def create_app(agent: SqlAgent | None = None, conversations: ConversationStore | None = None) -> FastAPI:
+class UsageOut(BaseModel):
+    day: date
+    running: int
+    max_concurrent_runs: int
+    spent_today: int
+    """Model tokens used today by questions that have finished."""
+    reserved_today: int
+    """Tokens held for questions still running, counted against the budget until they finish."""
+    daily_token_budget: int
+
+
+class Unauthorized(Exception):
+    """The request did not carry the shared token."""
+
+
+HTTP_ERROR_KINDS = {404: "not_found", 405: "method_not_allowed", 413: "too_large"}
+
+
+def create_app(
+    agent: SqlAgent | None = None,
+    conversations: ConversationStore | None = None,
+    *,
+    limits: SpendingLimits | None = None,
+    api_token: str | None = None,
+) -> FastAPI:
     """Build the service around one agent, which is safe to share between requests.
 
     Each call to `answer` builds its own tools and graph, and the database opens a fresh
-    read-only connection per query, so concurrent questions do not share state.
+    read-only connection per query, so concurrent questions do not share state. With
+    `api_token` set, every endpoint except health requires it as a bearer token.
     """
     agent = agent or SqlAgent()
     conversations = ConversationStore() if conversations is None else conversations
+    limits = SpendingLimits.from_settings(agent.settings) if limits is None else limits
     # Streaming runs outlive their connection, so they are held here until they finish.
     background: set[asyncio.Task] = set()
     app = FastAPI(
         title="SQL agent",
         summary="Questions about synthetic patient data, answered with traceable SQL.",
-        responses={status: {"model": ErrorOut} for status in (404, 409, 422, 502, 503)},
+        responses={status: {"model": ErrorOut} for status in (401, 404, 409, 413, 422, 429, 502, 503)},
     )
+    # Added innermost first: the request log wraps everything, so refusals are logged too.
+    # Starlette's limit counts the bytes of a body that does not declare its length, and
+    # the check outside it refuses a declared oversized body with the usual error shape.
+    app.add_middleware(RequestBodyLimitMiddleware, max_body_size=MAX_BODY_BYTES)
+    app.add_middleware(DeclaredLengthLimit, max_body_size=MAX_BODY_BYTES)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(agent.settings.cors_origins),
         allow_methods=["GET", "POST"],
         allow_headers=["Content-Type", "Authorization"],
     )
+    if agent.settings.request_log_path is not None:
+        app.add_middleware(RequestLogMiddleware, path=agent.settings.request_log_path)
+
+    bearer = HTTPBearer(auto_error=False, description="The shared token, when the service is configured with one.")
+
+    def require_token(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> None:
+        if api_token is None:
+            return
+        supplied = credentials.credentials if credentials else ""
+        if not secrets.compare_digest(supplied.encode(), api_token.encode()):
+            raise Unauthorized()
+        request.state.authenticated = True
+
+    protected = APIRouter(dependencies=[Depends(require_token)])
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -184,6 +244,31 @@ def create_app(agent: SqlAgent | None = None, conversations: ConversationStore |
     @app.exception_handler(anthropic.APIError)
     async def failed(_: Request, exc: Exception) -> JSONResponse:
         return _error(*_failure(exc))
+
+    @app.exception_handler(Unauthorized)
+    async def unauthorized(request: Request, _: Unauthorized) -> JSONResponse:
+        request.state.refused = "unauthorized"
+        response = _error(401, "unauthorized", "Send the service token as: Authorization: Bearer <token>.")
+        response.headers["WWW-Authenticate"] = "Bearer"
+        return response
+
+    @app.exception_handler(LimitExceeded)
+    async def limited(request: Request, exc: LimitExceeded) -> JSONResponse:
+        request.state.refused = exc.kind
+        response = _error(429, exc.kind, exc.message)
+        if exc.kind == "too_many_runs":
+            response.headers["Retry-After"] = "10"
+        return response
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        kind = HTTP_ERROR_KINDS.get(exc.status_code, "http_error")
+        if exc.status_code == 413:
+            request.state.refused = kind
+            message = f"The request body is larger than {MAX_BODY_BYTES} bytes."
+        else:
+            message = str(exc.detail)
+        return _error(exc.status_code, kind, message)
 
     @app.exception_handler(UnknownConversation)
     async def unknown_conversation(_: Request, exc: UnknownConversation) -> JSONResponse:
@@ -207,20 +292,24 @@ def create_app(agent: SqlAgent | None = None, conversations: ConversationStore |
             as_of=agent.as_of,
         )
 
-    @app.get("/api/schema")
+    @protected.get("/api/schema")
     def schema() -> list[TableOut]:
         return schema_payload(agent)
 
-    @app.get("/api/definitions")
+    @protected.get("/api/usage")
+    def usage() -> UsageOut:
+        return UsageOut(**limits.usage())
+
+    @protected.get("/api/definitions")
     def definitions() -> list[DefinitionOut]:
         return [definition_payload(agent.layer, name) for name in agent.layer.definitions]
 
-    @app.post("/api/ask")
+    @protected.post("/api/ask")
     async def ask(request: AskRequest) -> AnswerOut:
-        conversation_id, history, turn = conversations.begin(request.conversation_id)
-        return await _run(agent, conversations, conversation_id, history, turn, request.question)
+        claim = _claim(conversations, limits, request.conversation_id)
+        return await _run(agent, conversations, limits, claim, request.question)
 
-    @app.post(
+    @protected.post(
         "/api/ask/stream",
         response_class=StreamingResponse,
         responses={200: {"content": {"text/event-stream": {}}, "description": STREAM_DESCRIPTION}},
@@ -229,15 +318,55 @@ def create_app(agent: SqlAgent | None = None, conversations: ConversationStore |
         # Claim the conversation and start the run before the stream starts, so an unknown
         # or busy conversation is an ordinary error response, and a reader that never
         # arrives cannot leave the conversation claimed.
-        conversation_id, history, turn = conversations.begin(request.conversation_id)
-        events = _start(agent, conversations, conversation_id, history, turn, request.question, background)
+        claim = _claim(conversations, limits, request.conversation_id)
+        events = _start(agent, conversations, limits, claim, request.question, background)
         return StreamingResponse(
-            _relay(events, conversation_id, turn),
+            _relay(events, claim.conversation_id, claim.turn),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    app.include_router(protected)
     return app
+
+
+class DeclaredLengthLimit:
+    """Refuse a request whose Content-Length is over the limit, before reading any of it."""
+
+    def __init__(self, app: ASGIApp, max_body_size: int) -> None:
+        self.app = app
+        self.max_body_size = max_body_size
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            declared = Headers(scope=scope).get("content-length", "")
+            if declared.isdigit() and int(declared) > self.max_body_size:
+                scope.setdefault("state", {})["refused"] = HTTP_ERROR_KINDS[413]
+                response = _error(413, HTTP_ERROR_KINDS[413], f"The request body is larger than {self.max_body_size} bytes.")
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+@dataclass(frozen=True)
+class _Claim:
+    """A conversation claimed for one question, and the budget reserved for it."""
+
+    conversation_id: str
+    history: tuple[Turn, ...]
+    turn: int
+    reservation: Reservation
+
+
+def _claim(conversations: ConversationStore, limits: SpendingLimits, conversation_id: str | None) -> _Claim:
+    """Claim the conversation, then the budget, releasing the conversation if that fails."""
+    conversation_id, history, turn = conversations.begin(conversation_id)
+    try:
+        reservation = limits.reserve(conversation_id)
+    except LimitExceeded:
+        conversations.finish(conversation_id, None)
+        raise
+    return _Claim(conversation_id, history, turn, reservation)
 
 
 STREAM_DESCRIPTION = """Server-sent events, read with fetch because the request is a POST.
@@ -253,22 +382,21 @@ STREAM_DESCRIPTION = """Server-sent events, read with fetch because the request 
 async def _run(
     agent: SqlAgent,
     conversations: ConversationStore,
-    conversation_id: str,
-    history: tuple[Turn, ...],
-    turn: int,
+    limits: SpendingLimits,
+    claim: _Claim,
     question: str,
     on_event: Callable[[str, str], None] | None = None,
 ) -> AnswerOut:
-    """Answer one question in a conversation that `begin` has already claimed."""
-    answered = None
+    """Answer one claimed question, then release its conversation and settle its budget."""
+    result = None
     try:
         result = await anyio.to_thread.run_sync(
-            _answer_and_log, agent, question, history, conversation_id, on_event
+            _answer_and_log, agent, question, claim.history, claim.conversation_id, on_event
         )
-        answered = result.as_turn()
-        return answer_payload(result, agent.layer, conversation_id=conversation_id, turn=turn)
+        return answer_payload(result, agent.layer, conversation_id=claim.conversation_id, turn=claim.turn)
     finally:
-        conversations.finish(conversation_id, answered)
+        conversations.finish(claim.conversation_id, result.as_turn() if result else None)
+        limits.settle(claim.reservation, result.input_tokens + result.output_tokens if result else None)
 
 
 def _answer_and_log(
@@ -287,9 +415,8 @@ def _answer_and_log(
 def _start(
     agent: SqlAgent,
     conversations: ConversationStore,
-    conversation_id: str,
-    history: tuple[Turn, ...],
-    turn: int,
+    limits: SpendingLimits,
+    claim: _Claim,
     question: str,
     background: set[asyncio.Task],
 ) -> asyncio.Queue[tuple[str, dict]]:
@@ -311,7 +438,7 @@ def _start(
 
     async def run() -> None:
         try:
-            answer = await _run(agent, conversations, conversation_id, history, turn, question, on_event)
+            answer = await _run(agent, conversations, limits, claim, question, on_event)
             events.put_nowait(("answer", answer.model_dump(mode="json")))
         except (AgentError, anthropic.APIError) as exc:
             status, kind, message = _failure(exc)
