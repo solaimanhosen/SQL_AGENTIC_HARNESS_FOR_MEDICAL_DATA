@@ -9,9 +9,9 @@ SQL and the evidence behind every figure.
 > Each finding names the query that produced it, the definitions it relied on and whether
 > they are confirmed, and the exact dates of the window.
 
-An Iowa State University senior design project (team sb_cc_2, fall 2026), built for
-Telligen. It runs on a synthetic [Synthea](https://synthetichealth.github.io/synthea/)
-database of 108 patients, so no real patient data is involved.
+An Iowa State University Creative Component project (fall 2026), built for Telligen. It
+runs on a synthetic [Synthea](https://synthetichealth.github.io/synthea/) database of 108
+patients, so no real patient data is involved.
 
 ## How it works
 
@@ -99,3 +99,8 @@ risks in [`docs/security.md`](docs/security.md) before pointing it at anything r
 - [Evaluation](docs/evaluation.md): how answers are scored, and the latest results
 - [Security review](docs/security.md): threats, controls, evidence and residual risks
 - [Decision records](docs/decisions/): why LangChain and Claude, and how time windows are anchored
+
+## License
+
+No license has been chosen yet, so all rights are reserved for now. One will be added once
+the terms with the project sponsor are confirmed.
