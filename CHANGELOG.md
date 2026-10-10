@@ -12,6 +12,11 @@ v1 is the backend, v2 will add the web interface.
   step appears live while the agent works, and follow-up questions continue the
   conversation. The page asks for the access token when the service requires one and keeps
   it in memory only.
+- Transparency panels on every answer, matching what the command line prints: the time
+  window and as-of date, definitions with their confirmation status, assumptions, caveats,
+  each traceability warning, the SQL that ran with failed attempts kept apart, the steps
+  the agent took, and what the run cost. Clicking a finding's citation opens the SQL at
+  that query. While the agent works, the step log shows each query as it runs.
 - A development proxy from the interface to the service, so the browser sees one origin.
 - Unit tests for the interface, including one proving that text from the data is shown as
   text and never run as markup.

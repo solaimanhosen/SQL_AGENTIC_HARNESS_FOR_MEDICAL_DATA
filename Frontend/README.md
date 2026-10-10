@@ -46,10 +46,28 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/api/agent-api.ts` | Calls the service. Reads `/api/ask/stream` with `fetch`, because the browser's `EventSource` cannot send a POST or a token. |
 | `src/app/api/sse.ts` | Parses server-sent events from text chunks that can split anywhere. |
 | `src/app/chat/chat-store.ts` | The conversation on screen: each question, its live steps and its answer. Carries the conversation id so follow-ups work. |
-| `src/app/chat/exchange-view.*` | One question and its answer: headline, findings with their query citations, caveats. |
+| `src/app/chat/exchange-view.*` | One question and what became of it: the live steps, then the answer or the failure. |
+| `src/app/chat/answer-view.*` | The answer and everything behind it: findings with clickable query citations, time window, definitions with their status, assumptions, caveats, traceability warnings, and what the run cost. |
+| `src/app/chat/query-list.*` | The SQL that ran, numbered as the findings cite it, with failed attempts kept apart. |
+| `src/app/chat/step-log.ts` | Every step the agent took, with the SQL of each query, live and afterwards. |
 | `src/app/chat/composer.ts` | The question box. Enter sends, Shift+Enter adds a line. |
 | `src/app/chat/token-prompt.ts` | Asks for the access token when the service requires one. |
 | `src/app/app.*` | The page: service status, example questions, the thread and the question box. |
+
+## What an answer shows
+
+Everything the command line prints is on the page, and nothing more exact than the service
+sent:
+
+- the headline and findings, where each "Query N" opens the SQL panel at that query;
+- the time window with its dates, and the as-of date;
+- each definition with its status: confirmed, assumed, or not a shared definition;
+- assumptions and caveats;
+- traceability warnings, spelled out one by one;
+- the SQL that produced the answer, and any failed attempts with their errors;
+- the steps the agent took, and the queries, time and tokens the run used.
+
+Result tables and downloads come next.
 
 ## Rules worth keeping
 

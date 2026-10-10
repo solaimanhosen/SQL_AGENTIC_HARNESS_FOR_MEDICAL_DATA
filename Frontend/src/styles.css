@@ -11,6 +11,9 @@
   --warning-bg: #fff4d6;
   --warning-text: #6b4e00;
   --danger: #b3261e;
+  --ok-bg: #dff3e4;
+  --ok-text: #14532d;
+  --code-bg: #f1f2f4;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -26,6 +29,9 @@
     --warning-bg: #3a3018;
     --warning-text: #f3d68a;
     --danger: #f2877f;
+    --ok-bg: #173524;
+    --ok-text: #9be3b4;
+    --code-bg: #15171a;
   }
 }
 
@@ -86,4 +92,49 @@ button.link {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* Shared by the answer, the live steps and the SQL panel. */
+.card {
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+pre {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.4rem;
+  background: var(--code-bg);
+  color: var(--text);
+  font:
+    0.8rem/1.45 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+details.panel {
+  margin-top: 0.9rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--border);
+}
+
+details.panel > summary {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+details.panel > summary:hover {
+  color: var(--text);
 }
