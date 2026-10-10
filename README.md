@@ -80,7 +80,7 @@ answers against the data, for free.
 |---|---|
 | v1.0.0 | The backend: agent, safety layers, semantic layer, traceable answers, evaluation, security review |
 | v1.1.0 | The HTTP service: follow-up questions, live steps, access token, spending limits |
-| In progress | The web interface: chat, live steps, transparency panels, result tables and downloads done |
+| v2.0.0 | The web interface: chat, live steps, transparency panels, result tables, CSV and JSON downloads |
 
 Still to come: analytics and charts over query results, self-contained HTML reports, a
 PostgreSQL design, and deployment.

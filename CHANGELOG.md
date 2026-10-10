@@ -1,9 +1,13 @@
 # Changelog
 
 Notable changes to this project, newest first. Versions follow the project milestones:
-v1 is the backend, v2 will add the web interface.
+v1 is the backend, v2 adds the web interface.
 
-## Unreleased
+## v2.0.0 — 9 October 2026
+
+The web interface. Ask a question in a browser, watch the agent work, and read an answer
+with everything behind it: the queries each finding cites, the definitions and their
+status, the SQL, the rows, and anything that could not be traced.
 
 ### Added
 
