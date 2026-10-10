@@ -3,6 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { Answer, QueryRecord, Step } from '../api/types';
 import { answerFixture } from '../testing/fixtures';
 import { AnswerView } from './answer-view';
+import { Exporter, toCsv } from './export';
 
 const FAILED: QueryRecord = {
   number: null,
@@ -16,7 +17,16 @@ const FAILED: QueryRecord = {
   rows: [],
 };
 
-async function render(overrides: Partial<Answer> = {}, steps: Step[] = []) {
+function fakeExporter(copies = true) {
+  return { save: vi.fn(), saveCsv: vi.fn(), copy: vi.fn(async () => copies) };
+}
+
+async function render(
+  overrides: Partial<Answer> = {},
+  steps: Step[] = [],
+  exporter = fakeExporter(),
+) {
+  TestBed.configureTestingModule({ providers: [{ provide: Exporter, useValue: exporter }] });
   const fixture = TestBed.createComponent(AnswerView);
   fixture.componentRef.setInput('answer', answerFixture(overrides));
   fixture.componentRef.setInput('steps', steps);
@@ -223,5 +233,70 @@ describe('AnswerView', () => {
     expect(element.querySelector('img')).toBeNull();
     expect(element.querySelector('script')).toBeNull();
     expect(element.querySelector('.query pre')?.textContent).toBe(injected);
+  });
+
+  it('shows the rows each query returned', async () => {
+    const { element } = await render({
+      queries: [
+        {
+          ...answerFixture().queries[0],
+          columns: ['gender', 'n'],
+          rows: [
+            ['F', 13],
+            ['M', 21],
+          ],
+          row_count: 2,
+        },
+      ],
+    });
+    const rows = [...element.querySelectorAll('app-result-table tbody tr')].map(text);
+    expect(rows.length).toBe(2);
+    expect(element.querySelector('app-result-table th')?.textContent).toBe('gender');
+  });
+
+  it('copies the SQL of a query and says so', async () => {
+    const exporter = fakeExporter();
+    const { fixture, element } = await render({}, [], exporter);
+    const button = element.querySelector('.query .tool') as HTMLButtonElement;
+    expect(text(button)).toBe('Copy SQL');
+
+    button.click();
+    await fixture.whenStable();
+    expect(exporter.copy).toHaveBeenCalledWith('SELECT COUNT(*) AS n FROM conditions');
+    expect(text(button)).toBe('Copied');
+  });
+
+  it('says when the browser refused the copy', async () => {
+    const { fixture, element } = await render({}, [], fakeExporter(false));
+    const button = element.querySelector('.query .tool') as HTMLButtonElement;
+    button.click();
+    await fixture.whenStable();
+    expect(text(button)).toBe('Copy failed');
+  });
+
+  it('downloads the rows of a query as CSV, named after the conversation and query', async () => {
+    const exporter = fakeExporter();
+    const { element } = await render({}, [], exporter);
+    const button = [...element.querySelectorAll<HTMLButtonElement>('.query .tool')].find(
+      (item) => text(item) === 'Download rows (CSV)',
+    )!;
+    button.click();
+    expect(exporter.saveCsv).toHaveBeenCalledWith('cccccccc-turn1-query1.csv', toCsv(['n'], [[8]]));
+  });
+
+  it('downloads the whole answer as JSON', async () => {
+    const exporter = fakeExporter();
+    const { element } = await render({}, [], exporter);
+    (element.querySelector('.foot .tool') as HTMLButtonElement).click();
+    const [name, body, type] = exporter.save.mock.calls[0];
+    expect(name).toBe('cccccccc-turn1-answer.json');
+    expect(type).toBe('application/json');
+    expect(JSON.parse(body)).toEqual(answerFixture());
+  });
+
+  it('offers no rows or CSV for a failed attempt', async () => {
+    const { element } = await render({ queries: [FAILED] });
+    expect(element.querySelector('app-result-table')).toBeNull();
+    expect(element.querySelector('.attempts .tool')).toBeNull();
   });
 });

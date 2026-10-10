@@ -69,7 +69,7 @@ Prefer the terminal? From `Backend/`:
 | Backend tests, no network | `.venv/bin/python -m pytest -q` | 238 passed |
 | Attack catalogue | `.venv/bin/python -m sql_agent.check_security` | 35 of 35 blocked |
 | Evaluation against hand-verified answers | `.venv/bin/python -m sql_agent.evaluate` | 20 of 20 |
-| Interface tests, from `Frontend/` | `npm test -- --watch=false` | 35 passed |
+| Interface tests, from `Frontend/` | `npm test -- --watch=false` | 53 passed |
 
 The evaluation calls the model and costs money. Add `--dry-run` to check only the known
 answers against the data, for free.
@@ -80,7 +80,7 @@ answers against the data, for free.
 |---|---|
 | v1.0.0 | The backend: agent, safety layers, semantic layer, traceable answers, evaluation, security review |
 | v1.1.0 | The HTTP service: follow-up questions, live steps, access token, spending limits |
-| In progress | The web interface: chat, live steps and transparency panels done; result tables and downloads next |
+| In progress | The web interface: chat, live steps, transparency panels, result tables and downloads done |
 
 Still to come: analytics and charts over query results, self-contained HTML reports, a
 PostgreSQL design, and deployment.

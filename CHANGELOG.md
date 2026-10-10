@@ -17,6 +17,9 @@ v1 is the backend, v2 will add the web interface.
   each traceability warning, the SQL that ran with failed attempts kept apart, the steps
   the agent took, and what the run cost. Clicking a finding's citation opens the SQL at
   that query. While the agent works, the step log shows each query as it runs.
+- Result tables under each query, a button to copy its SQL, and downloads: the rows of a
+  query as CSV and the whole answer as JSON. CSV cells that a spreadsheet would run as a
+  formula are defused.
 - A development proxy from the interface to the service, so the browser sees one origin.
 - Unit tests for the interface, including one proving that text from the data is shown as
   text and never run as markup.

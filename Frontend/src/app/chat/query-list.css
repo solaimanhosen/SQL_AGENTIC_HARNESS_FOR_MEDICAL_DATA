@@ -37,3 +37,10 @@
   margin: 0.3rem 0 0;
   font-size: 0.82rem;
 }
+
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}

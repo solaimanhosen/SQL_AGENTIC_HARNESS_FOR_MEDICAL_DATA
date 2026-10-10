@@ -121,7 +121,7 @@
     </section>
   }
 
-  <app-query-list [queries]="item.queries" />
+  <app-query-list [queries]="item.queries" [fileStem]="stem()" />
 
   @if (steps().length) {
     <details class="panel">
@@ -130,5 +130,8 @@
     </details>
   }
 
-  <p class="meta">{{ meta() }}</p>
+  <div class="foot">
+    <p class="meta">{{ meta() }}</p>
+    <button type="button" class="tool" (click)="downloadJson()">Download answer (JSON)</button>
+  </div>
 </div>

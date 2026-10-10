@@ -1,6 +1,7 @@
-import { Component, computed, input, viewChild } from '@angular/core';
+import { Component, computed, inject, input, viewChild } from '@angular/core';
 
 import { Answer, DefinitionStatus, Step } from '../api/types';
+import { Exporter, answerJson, fileStem } from './export';
 import { QueryList } from './query-list';
 import { StepLog } from './step-log';
 
@@ -29,6 +30,9 @@ export class AnswerView {
   readonly steps = input<Step[]>([]);
 
   private readonly queryList = viewChild(QueryList);
+  private readonly exporter = inject(Exporter);
+
+  protected readonly stem = computed(() => fileStem(this.answer()));
 
   private readonly ranNumbers = computed(
     () =>
@@ -63,6 +67,11 @@ export class AnswerView {
 
   protected showQuery(number: number): void {
     this.queryList()?.reveal(number);
+  }
+
+  /** The whole answer as the service sent it, rows included. */
+  protected downloadJson(): void {
+    this.exporter.save(`${this.stem()}-answer.json`, answerJson(this.answer()), 'application/json');
   }
 
   protected statusLabel(status: DefinitionStatus): string {

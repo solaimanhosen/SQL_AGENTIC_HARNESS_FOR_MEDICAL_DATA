@@ -10,6 +10,8 @@ import {
 } from '@angular/core';
 
 import { QueryRecord } from '../api/types';
+import { Exporter, toCsv } from './export';
+import { ResultTable } from './result-table';
 
 /**
  * The SQL behind an answer, as the service recorded it while it ran. Successful queries carry
@@ -17,17 +19,23 @@ import { QueryRecord } from '../api/types';
  */
 @Component({
   selector: 'app-query-list',
+  imports: [ResultTable],
   templateUrl: './query-list.html',
   styleUrl: './query-list.css',
 })
 export class QueryList {
   readonly queries = input.required<QueryRecord[]>();
+  /** Start of each CSV file name, tying it to the conversation and question. */
+  readonly fileStem = input('answer');
 
   private readonly host: ElementRef<HTMLElement> = inject(ElementRef);
   private readonly injector = inject(Injector);
+  private readonly exporter = inject(Exporter);
 
   protected readonly open = signal(false);
   protected readonly lit = signal<number | null>(null);
+  /** The query whose copy button was just used, and whether the copy worked. */
+  protected readonly copied = signal<{ number: number | null; ok: boolean } | null>(null);
   protected readonly ran = computed(() => this.queries().filter((query) => query.ok));
   protected readonly failed = computed(() => this.queries().filter((query) => !query.ok));
 
@@ -44,6 +52,28 @@ export class QueryList {
         target?.focus({ preventScroll: true });
       },
       { injector: this.injector },
+    );
+  }
+
+  protected async copySql(query: QueryRecord): Promise<void> {
+    const ok = await this.exporter.copy(query.sql);
+    const mark = { number: query.number, ok };
+    this.copied.set(mark);
+    setTimeout(() => this.copied() === mark && this.copied.set(null), 2000);
+  }
+
+  protected copyLabel(query: QueryRecord): string {
+    const mark = this.copied();
+    if (mark?.number !== query.number) {
+      return 'Copy SQL';
+    }
+    return mark.ok ? 'Copied' : 'Copy failed';
+  }
+
+  protected downloadCsv(query: QueryRecord): void {
+    this.exporter.saveCsv(
+      `${this.fileStem()}-query${query.number}.csv`,
+      toCsv(query.columns, query.rows),
     );
   }
 

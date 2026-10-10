@@ -18,10 +18,27 @@
         <p class="head">
           <strong>Query {{ query.number }}</strong> · {{ summary(query) }}
           @if (query.truncated) {
-            <span class="cut">· more rows matched than the row limit keeps</span>
+            <span class="cut">· more rows matched, and only these were kept</span>
           }
         </p>
         <pre><code>{{ query.sql }}</code></pre>
+        <div class="tools">
+          <button type="button" class="tool" (click)="copySql(query)" aria-live="polite">
+            {{ copyLabel(query) }}
+          </button>
+          @if (query.columns.length) {
+            <button type="button" class="tool" (click)="downloadCsv(query)">
+              Download rows (CSV)
+            </button>
+          }
+        </div>
+        @if (query.columns.length) {
+          <app-result-table
+            [columns]="query.columns"
+            [rows]="query.rows"
+            [label]="'Rows from query ' + query.number"
+          />
+        }
       </div>
     }
 

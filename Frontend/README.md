@@ -49,6 +49,8 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/chat/exchange-view.*` | One question and what became of it: the live steps, then the answer or the failure. |
 | `src/app/chat/answer-view.*` | The answer and everything behind it: findings with clickable query citations, time window, definitions with their status, assumptions, caveats, traceability warnings, and what the run cost. |
 | `src/app/chat/query-list.*` | The SQL that ran, numbered as the findings cite it, with failed attempts kept apart. |
+| `src/app/chat/result-table.ts` | The rows one query returned. |
+| `src/app/chat/export.ts` | CSV and JSON building, file names, and the download and clipboard helpers. |
 | `src/app/chat/step-log.ts` | Every step the agent took, with the SQL of each query, live and afterwards. |
 | `src/app/chat/composer.ts` | The question box. Enter sends, Shift+Enter adds a line. |
 | `src/app/chat/token-prompt.ts` | Asks for the access token when the service requires one. |
@@ -67,7 +69,20 @@ sent:
 - the SQL that produced the answer, and any failed attempts with their errors;
 - the steps the agent took, and the queries, time and tokens the run used.
 
-Result tables and downloads come next.
+## Taking the evidence away
+
+- **Result tables.** Each query shows the rows it returned, the first ten at once and the
+  rest on request. The service keeps at most its row limit, and says when more matched.
+- **Copy SQL.** One click per query, to rerun it elsewhere.
+- **Download rows (CSV).** One file per query, readable by a spreadsheet. Text that a
+  spreadsheet would run as a formula is defused with a leading apostrophe, since stored
+  text is untrusted.
+- **Download answer (JSON).** The whole answer as the service sent it: findings,
+  definitions, warnings, SQL and rows.
+
+Files are named after the conversation and the question, such as
+`5d6b7095-turn1-query1.csv`. They are built in the browser, so nothing extra is sent
+anywhere.
 
 ## Rules worth keeping
 

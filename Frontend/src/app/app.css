@@ -41,6 +41,7 @@ h1 {
 
 .thread {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: 1.5rem;
   padding: 1.5rem 1rem;
