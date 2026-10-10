@@ -1,0 +1,55 @@
+.exchange {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.question {
+  justify-self: end;
+  max-width: 85%;
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  border-radius: 1rem 1rem 0.25rem 1rem;
+  background: var(--accent);
+  color: var(--on-accent);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.now {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.spinner {
+  flex-shrink: 0;
+  width: 0.9rem;
+  height: 0.9rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+.failed {
+  border-color: var(--danger);
+}
+
+.failed p {
+  margin: 0;
+}

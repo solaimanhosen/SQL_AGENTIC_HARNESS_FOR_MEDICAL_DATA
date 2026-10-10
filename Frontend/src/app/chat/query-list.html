@@ -1,0 +1,62 @@
+@if (queries().length) {
+  <details class="panel" [open]="open()" (toggle)="onToggle($event)">
+    <summary>
+      @if (ran().length) {
+        SQL that produced this answer ({{ ran().length }})
+      } @else {
+        SQL the agent tried ({{ failed().length }} failed)
+      }
+    </summary>
+
+    @for (query of ran(); track query.number) {
+      <div
+        class="query"
+        tabindex="-1"
+        [attr.data-query]="query.number"
+        [class.lit]="lit() === query.number"
+      >
+        <p class="head">
+          <strong>Query {{ query.number }}</strong> · {{ summary(query) }}
+          @if (query.truncated) {
+            <span class="cut">· more rows matched, and only these were kept</span>
+          }
+        </p>
+        <pre><code>{{ query.sql }}</code></pre>
+        <div class="tools">
+          <button type="button" class="tool" (click)="copySql(query)" aria-live="polite">
+            {{ copyLabel(query) }}
+          </button>
+          @if (query.columns.length) {
+            <button type="button" class="tool" (click)="downloadCsv(query)">
+              Download rows (CSV)
+            </button>
+          }
+        </div>
+        @if (query.columns.length) {
+          <app-result-table
+            [columns]="query.columns"
+            [rows]="query.rows"
+            [label]="'Rows from query ' + query.number"
+          />
+        }
+      </div>
+    }
+
+    @if (failed().length) {
+      <div class="attempts">
+        @if (ran().length) {
+          <p class="head">
+            {{ failed().length }} failed {{ failed().length === 1 ? 'attempt' : 'attempts' }}. No
+            figure in the answer comes from these.
+          </p>
+        }
+        @for (query of failed(); track $index) {
+          <div class="query bad">
+            <pre><code>{{ query.sql }}</code></pre>
+            <p class="error">{{ query.error }}</p>
+          </div>
+        }
+      </div>
+    }
+  </details>
+}

@@ -1,0 +1,137 @@
+@let item = answer();
+<div class="card answer">
+  @if (item.structured) {
+    <p class="headline">{{ item.headline }}</p>
+
+    @if (item.findings.length) {
+      <section>
+        <h3>Findings</h3>
+        <ul class="findings">
+          @for (finding of item.findings; track $index) {
+            <li>
+              {{ finding.statement }}
+              @for (number of finding.query_numbers; track number) {
+                @if (ran(number)) {
+                  <button
+                    type="button"
+                    class="cite"
+                    title="Show the SQL for this query"
+                    (click)="showQuery(number)"
+                  >
+                    Query {{ number }}
+                  </button>
+                } @else {
+                  <span class="cite uncited">Query {{ number }} did not run</span>
+                }
+              } @empty {
+                <span class="cite uncited">No query cited</span>
+              }
+            </li>
+          }
+        </ul>
+      </section>
+    }
+
+    <dl class="facts">
+      <div>
+        <dt>Time window</dt>
+        <dd>{{ item.time_window?.description }}</dd>
+      </div>
+      <div>
+        <dt>As-of date</dt>
+        <dd>{{ item.as_of }}</dd>
+      </div>
+    </dl>
+
+    @if (item.definitions_used.length) {
+      <section class="definitions">
+        <h3>Definitions used</h3>
+        <ul>
+          @for (definition of item.definitions_used; track definition.name) {
+            <li>
+              <span class="label">{{ definition.label }}</span>
+              @if (definition.status !== 'unknown') {
+                <code>{{ definition.name }}</code>
+              }
+              <span class="badge" [class]="definition.status">{{
+                statusLabel(definition.status)
+              }}</span>
+              <p>
+                @if (definition.status === 'unknown') {
+                  The agent chose its own meaning for this term.
+                } @else {
+                  {{ definition.summary }}
+                }
+              </p>
+            </li>
+          }
+        </ul>
+      </section>
+    }
+
+    @if (item.assumptions.length) {
+      <section class="assumptions">
+        <h3>Assumptions</h3>
+        <ul>
+          @for (assumption of item.assumptions; track $index) {
+            <li>{{ assumption }}</li>
+          }
+        </ul>
+      </section>
+    }
+
+    @if (item.caveats.length) {
+      <section class="caveats">
+        <h3>Caveats</h3>
+        <ul>
+          @for (caveat of item.caveats; track $index) {
+            <li>{{ caveat }}</li>
+          }
+        </ul>
+      </section>
+    }
+  } @else {
+    <p class="prose">{{ item.answer }}</p>
+    <p class="warning" role="note">
+      This answer came back as plain text, so its figures are not linked to queries.
+    </p>
+  }
+
+  @if (item.issues.any) {
+    <section class="warning" role="note">
+      <h3>Traceability warnings</h3>
+      <ul>
+        @if (item.issues.unknown_definitions.length) {
+          <li>
+            Named definitions that do not exist: {{ item.issues.unknown_definitions.join(', ') }}
+          </li>
+        }
+        @if (item.issues.missing_query_numbers.length) {
+          <li>
+            Cited query numbers that did not run: {{ item.issues.missing_query_numbers.join(', ') }}
+          </li>
+        }
+        @if (item.issues.window_not_in_sql) {
+          <li>Time window not backed by SQL: {{ item.issues.window_not_in_sql }}</li>
+        }
+        @for (statement of item.issues.unsupported_findings; track $index) {
+          <li>No query cited for: {{ statement }}</li>
+        }
+      </ul>
+    </section>
+  }
+
+  <app-query-list [queries]="item.queries" [fileStem]="stem()" />
+
+  @if (steps().length) {
+    <details class="panel">
+      <summary>Steps the agent took ({{ steps().length }})</summary>
+      <app-step-log [steps]="steps()" />
+    </details>
+  }
+
+  <div class="foot">
+    <p class="meta">{{ meta() }}</p>
+    <button type="button" class="tool" (click)="downloadJson()">Download answer (JSON)</button>
+  </div>
+</div>

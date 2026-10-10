@@ -1,0 +1,37 @@
+@let item = exchange();
+<article class="exchange">
+  <p class="question">{{ item.question }}</p>
+
+  @switch (item.status) {
+    @case ('working') {
+      <div class="card working">
+        <p class="now" role="status" aria-live="polite">
+          <span class="spinner" aria-hidden="true"></span>
+          <span>{{ latestStep() }}</span>
+          @if (queriesRun()) {
+            <span class="muted"
+              >· {{ queriesRun() }} {{ queriesRun() === 1 ? 'query' : 'queries' }} run</span
+            >
+          }
+        </p>
+        @if (item.steps.length) {
+          <details class="panel">
+            <summary>Steps so far ({{ item.steps.length }})</summary>
+            <app-step-log [steps]="item.steps" />
+          </details>
+        }
+      </div>
+    }
+    @case ('answered') {
+      <app-answer-view [answer]="item.answer!" [steps]="item.steps" />
+    }
+    @case ('failed') {
+      <div class="card failed" role="alert">
+        <p>{{ item.error?.message }}</p>
+        @if (item.error?.kind !== 'unauthorized') {
+          <button type="button" class="link" (click)="retry.emit(item.id)">Try again</button>
+        }
+      </div>
+    }
+  }
+</article>

@@ -1,7 +1,36 @@
 # Changelog
 
 Notable changes to this project, newest first. Versions follow the project milestones:
-v1 is the backend, v2 will add the web interface.
+v1 is the backend, v2 adds the web interface.
+
+## v2.0.0 — 9 October 2026
+
+The web interface. Ask a question in a browser, watch the agent work, and read an answer
+with everything behind it: the queries each finding cites, the definitions and their
+status, the SQL, the rows, and anything that could not be traced.
+
+### Added
+
+- The web interface, in Angular 22 under `Frontend/`. Ask a question in the browser and
+  read the answer: its headline, findings with their query citations, and caveats. Each
+  step appears live while the agent works, and follow-up questions continue the
+  conversation. The page asks for the access token when the service requires one and keeps
+  it in memory only.
+- Transparency panels on every answer, matching what the command line prints: the time
+  window and as-of date, definitions with their confirmation status, assumptions, caveats,
+  each traceability warning, the SQL that ran with failed attempts kept apart, the steps
+  the agent took, and what the run cost. Clicking a finding's citation opens the SQL at
+  that query. While the agent works, the step log shows each query as it runs.
+- Result tables under each query, a button to copy its SQL, and downloads: the rows of a
+  query as CSV and the whole answer as JSON. CSV cells that a spreadsheet would run as a
+  formula are defused.
+- A development proxy from the interface to the service, so the browser sees one origin.
+- Unit tests for the interface, including one proving that text from the data is shown as
+  text and never run as markup.
+
+### Changed
+
+- The root README now describes the project instead of the repository template.
 
 ## v1.1.0 — 28 September 2026
 
