@@ -43,7 +43,7 @@ from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .agent import AgentError, AgentResult, SqlAgent, Turn, describe_failure
-from .answer import describe_window
+from .answer import Draft, describe_window
 from .conversations import ConversationBusy, ConversationStore, UnknownConversation
 from .limits import LimitExceeded, Reservation, SpendingLimits
 from .requestlog import RequestLogMiddleware
@@ -374,7 +374,9 @@ STREAM_DESCRIPTION = """Server-sent events, read with fetch because the request 
 - `conversation`: `{conversation_id, turn}`, sent first.
 - `step`: `{kind, detail}` for each step, where kind is sql, sql_result, sql_error,
   describe_table or lookup_definition.
-- `answer`: the same body `/api/ask` returns. The stream then ends.
+- `answer_delta`: `{headline, findings}`, the whole answer text written so far, sent as it
+  grows. It is a draft: unchecked, and without citations, definitions or dates.
+- `answer`: the same body `/api/ask` returns, which replaces any draft. The stream then ends.
 - `error`: `{error, message, status}`. The stream then ends.
 """
 
@@ -386,12 +388,13 @@ async def _run(
     claim: _Claim,
     question: str,
     on_event: Callable[[str, str], None] | None = None,
+    on_draft: Callable[[Draft], None] | None = None,
 ) -> AnswerOut:
     """Answer one claimed question, then release its conversation and settle its budget."""
     result = None
     try:
         result = await anyio.to_thread.run_sync(
-            _answer_and_log, agent, question, claim.history, claim.conversation_id, on_event
+            _answer_and_log, agent, question, claim.history, claim.conversation_id, on_event, on_draft
         )
         return answer_payload(result, agent.layer, conversation_id=claim.conversation_id, turn=claim.turn)
     finally:
@@ -405,8 +408,9 @@ def _answer_and_log(
     history: tuple[Turn, ...],
     conversation_id: str,
     on_event: Callable[[str, str], None] | None,
+    on_draft: Callable[[Draft], None] | None,
 ) -> AgentResult:
-    result = agent.answer(question, history=history, on_event=on_event)
+    result = agent.answer(question, history=history, on_event=on_event, on_draft=on_draft)
     if agent.settings.log_path is not None:
         log_run(result, agent.settings.log_path, conversation_id=conversation_id)
     return result
@@ -429,16 +433,22 @@ def _start(
     loop = asyncio.get_running_loop()
     events: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
 
-    def on_event(kind: str, detail: str) -> None:
+    def send(event: str, data: dict) -> None:
         # Called from the worker thread, so the event is handed to the event loop.
         try:
-            loop.call_soon_threadsafe(events.put_nowait, ("step", {"kind": kind, "detail": detail}))
+            loop.call_soon_threadsafe(events.put_nowait, (event, data))
         except RuntimeError:
             pass  # the event loop has closed, so nobody is listening
 
+    def on_event(kind: str, detail: str) -> None:
+        send("step", {"kind": kind, "detail": detail})
+
+    def on_draft(draft: Draft) -> None:
+        send("answer_delta", {"headline": draft.headline, "findings": list(draft.findings)})
+
     async def run() -> None:
         try:
-            answer = await _run(agent, conversations, limits, claim, question, on_event)
+            answer = await _run(agent, conversations, limits, claim, question, on_event, on_draft)
             events.put_nowait(("answer", answer.model_dump(mode="json")))
         except (AgentError, anthropic.APIError) as exc:
             status, kind, message = _failure(exc)

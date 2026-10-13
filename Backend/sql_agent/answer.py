@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from langchain_core.utils.json import parse_partial_json
 from pydantic import BaseModel, Field
 
 from .semantic import SemanticLayer, window_bounds
@@ -77,6 +78,39 @@ class StructuredAnswer(BaseModel):
     caveats: list[str] = Field(
         default_factory=list, description="Only what changes how the answer should be read, such as a small cohort."
     )
+
+
+@dataclass(frozen=True)
+class Draft:
+    """The answer while the model is still writing it: text only, and not yet checked.
+
+    It carries no citations, definitions or dates. Those are exact, so they are shown only
+    once the answer is complete and has been checked against the run.
+    """
+
+    headline: str = ""
+    findings: tuple[str, ...] = ()
+
+
+def draft_from_partial(text: str) -> Draft | None:
+    """Read a draft out of a structured answer that has only partly arrived, if it holds one."""
+    if not text.lstrip().startswith("{"):
+        return None
+    try:
+        partial = parse_partial_json(text)
+    except ValueError:
+        return None
+    if not isinstance(partial, dict):
+        return None
+    headline = partial.get("headline")
+    findings = partial.get("findings")
+    statements = tuple(
+        finding["statement"].strip()
+        for finding in (findings if isinstance(findings, list) else [])
+        if isinstance(finding, dict) and isinstance(finding.get("statement"), str) and finding["statement"].strip()
+    )
+    draft = Draft(headline=headline.strip() if isinstance(headline, str) else "", findings=statements)
+    return draft if draft.headline or draft.findings else None
 
 
 @dataclass(frozen=True)

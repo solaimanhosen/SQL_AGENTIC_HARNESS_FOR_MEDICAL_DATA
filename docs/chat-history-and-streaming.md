@@ -77,6 +77,12 @@ reads the headline and finding statements out of the partial JSON and sends them
 `answer_delta` events. Each event carries the whole draft so far, so the interface simply
 shows the latest one.
 
+A live check on 13 October 2026 confirmed how the answer arrives: LangChain uses the
+model's native structured output, so the answer is JSON text from the model, not a tool
+call. For "How many patients have diabetes?" the run took 10.1 seconds, the first draft
+text arrived at 6.6 seconds, and 26 drafts followed over the next 1.7 seconds. The steps
+fill the time before that, as they did in v2.0.0.
+
 The draft is labelled as a draft. Citations, definition statuses, window dates and the
 traceability checks need the complete answer, so they appear only when the final `answer`
 event replaces the draft.
@@ -166,8 +172,8 @@ Every new endpoint requires the access token when one is configured.
 
 | Step | What | Status | Commit |
 |---|---|---|---|
-| 1 | Branch `sql_agent/chat/dev`, this document, live check of how the answer streams | In progress | |
-| 2 | Backend: streamed answer draft | Pending | |
+| 1 | Branch `sql_agent/chat/dev`, this document, live check of how the answer streams | Done | `fbe26d4` |
+| 2 | Backend: streamed answer draft | Done | |
 | 3 | Backend: conversations stored in SQLite | Pending | |
 | 4 | Backend: list, open, rename and delete endpoints | Pending | |
 | 5 | Interface: draft answer while the agent works | Pending | |

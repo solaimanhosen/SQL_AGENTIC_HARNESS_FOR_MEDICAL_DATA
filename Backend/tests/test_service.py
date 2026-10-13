@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sql_agent.agent import AgentError, AgentResult
-from sql_agent.answer import AnswerIssues, Finding, StructuredAnswer, TimeWindow
+from sql_agent.answer import AnswerIssues, Draft, Finding, StructuredAnswer, TimeWindow
 from sql_agent.config import load_settings
 from sql_agent.conversations import ConversationStore
 from sql_agent.limits import SpendingLimits
@@ -64,12 +64,15 @@ class StubAgent:
         self.questions = []
         self.histories = []
 
-    def answer(self, question, *, history=(), on_event=None):
+    def answer(self, question, *, history=(), on_event=None, on_draft=None):
         self.questions.append(question)
         self.histories.append(tuple(history))
         if on_event is not None:
             on_event("sql", "SELECT COUNT(*) AS n FROM conditions")
             on_event("sql_result", "1 rows in 3 ms")
+        if on_draft is not None:
+            on_draft(Draft(headline="Eight patients"))
+            on_draft(Draft(headline="Eight patients have diabetes.", findings=("8 patients match",)))
         if self.fail_with is not None:
             raise self.fail_with
         return _result(question, history)
@@ -285,14 +288,16 @@ def test_the_log_records_the_conversation_and_the_earlier_questions(settings, db
     assert records[1]["previous_questions"] == ["How many have diabetes?"]
 
 
-def test_the_stream_sends_the_conversation_then_each_step_then_the_answer(settings, db):
+def test_the_stream_sends_the_conversation_then_each_step_then_the_draft_then_the_answer(settings, db):
     client, _ = _client(settings, db)
     response = client.post("/api/ask/stream", json={"question": "How many have diabetes?"})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _events(response)
-    assert [event for event, _ in events] == ["conversation", "step", "step", "answer"]
+    assert [event for event, _ in events] == ["conversation", "step", "step", "answer_delta", "answer_delta", "answer"]
     conversation, answer = events[0][1], events[-1][1]
+    assert events[3][1] == {"headline": "Eight patients", "findings": []}
+    assert events[4][1] == {"headline": "Eight patients have diabetes.", "findings": ["8 patients match"]}
     assert conversation["turn"] == 1
     assert events[1][1] == {"kind": "sql", "detail": "SELECT COUNT(*) AS n FROM conditions"}
     assert answer["conversation_id"] == conversation["conversation_id"]

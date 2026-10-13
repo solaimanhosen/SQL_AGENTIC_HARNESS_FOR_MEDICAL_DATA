@@ -17,7 +17,7 @@ import anthropic
 from langchain.agents import create_agent
 from langgraph.errors import GraphRecursionError
 
-from .answer import AnswerIssues, StructuredAnswer, check_answer, render_answer
+from .answer import AnswerIssues, Draft, StructuredAnswer, check_answer, draft_from_partial, render_answer
 from .config import Settings, load_settings
 from .db import ReadOnlyDatabase
 from .llm import build_chat_model
@@ -125,11 +125,14 @@ class SqlAgent:
         *,
         history: Sequence[Turn] = (),
         on_event: Callable[[str, str], None] | None = None,
+        on_draft: Callable[[Draft], None] | None = None,
     ) -> AgentResult:
         """Answer one question, recording every query that ran along the way.
 
         `history` holds the earlier turns of a conversation, so a follow-up such as "what
         about heart disease?" can be understood. Only the most recent turns are kept.
+        `on_draft` is called with the answer's text as the model writes it, before it has
+        been checked. The returned result is the only checked answer.
         """
         question = (question or "").strip()
         if not question:
@@ -147,11 +150,20 @@ class SqlAgent:
         )
 
         started = time.perf_counter()
+        drafts = _DraftReader(on_draft)
+        state: dict = {}
         try:
-            state = agent.invoke(
+            # The model's output is streamed so the answer can be shown while it is
+            # written. "values" carries the state after each step, and the last is final.
+            for mode, payload in agent.stream(
                 {"messages": messages},
                 config={"recursion_limit": self.max_steps},
-            )
+                stream_mode=["messages", "values"],
+            ):
+                if mode == "values":
+                    state = payload
+                else:
+                    drafts.read(payload[0])
         except GraphRecursionError:
             raise AgentError(
                 f"The agent was still working after {self.max_steps} steps and was stopped. "
@@ -186,6 +198,34 @@ class SqlAgent:
             output_tokens=output_tokens,
             history=history,
         )
+
+
+class _DraftReader:
+    """Follows the model's output as it streams, reporting the answer written so far.
+
+    The structured answer arrives as JSON text in pieces. Text the model writes in any
+    other message, such as a remark before a tool call, is not an answer and is ignored.
+    """
+
+    def __init__(self, on_draft: Callable[[Draft], None] | None) -> None:
+        self.on_draft = on_draft
+        self._message_id: str | None = None
+        self._text = ""
+        self._last: Draft | None = None
+
+    def read(self, chunk: object) -> None:
+        if self.on_draft is None or getattr(chunk, "type", None) != "AIMessageChunk":
+            return
+        text = getattr(chunk, "text", "") or ""
+        if getattr(chunk, "id", None) != self._message_id:
+            self._message_id, self._text = getattr(chunk, "id", None), ""
+        if not text:
+            return
+        self._text += text
+        draft = draft_from_partial(self._text)
+        if draft is not None and draft != self._last:
+            self._last = draft
+            self.on_draft(draft)
 
 
 def _final_text(messages: list) -> str:
