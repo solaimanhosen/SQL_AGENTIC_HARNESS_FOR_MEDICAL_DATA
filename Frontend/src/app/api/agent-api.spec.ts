@@ -46,6 +46,7 @@ describe('AgentApi', () => {
     const text =
       sse('conversation', { conversation_id: 'c'.repeat(32), turn: 1 }) +
       sse('step', { kind: 'sql', detail: 'SELECT 1' }) +
+      sse('answer_delta', { headline: 'Eight pat', findings: [] }) +
       sse('answer', answer);
     const { api, fetchSpy } = setup(async () =>
       streamResponse([text.slice(0, 30), text.slice(30, 95), text.slice(95)]),
@@ -56,6 +57,7 @@ describe('AgentApi', () => {
     expect(events).toEqual([
       { type: 'conversation', conversationId: 'c'.repeat(32), turn: 1 },
       { type: 'step', step: { kind: 'sql', detail: 'SELECT 1' } },
+      { type: 'draft', draft: { headline: 'Eight pat', findings: [] } },
       { type: 'answer', answer },
     ]);
     const [url, init] = fetchSpy.mock.calls[0];

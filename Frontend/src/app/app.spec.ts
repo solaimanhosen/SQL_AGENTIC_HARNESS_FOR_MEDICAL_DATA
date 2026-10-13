@@ -90,6 +90,35 @@ describe('App', () => {
     expect(element.querySelector('.exchange b')).toBeNull();
   });
 
+  it('shows the draft as plain text while the answer is written', async () => {
+    const injected = '<img src=x onerror="alert(1)">Eight pat';
+    let release!: () => void;
+    const api = fakeApi(async function* () {
+      yield { type: 'conversation', conversationId: 'c'.repeat(32), turn: 1 };
+      yield { type: 'draft', draft: { headline: injected, findings: ['8 match'] } };
+      await new Promise<void>((resolve) => (release = resolve));
+      yield { type: 'answer', answer: answerFixture() };
+    });
+    const { fixture, element } = await render(api);
+
+    (element.querySelector('.example') as HTMLButtonElement).click();
+    await vi.waitFor(async () => {
+      await fixture.whenStable();
+      expect(element.querySelector('.draft-headline')?.textContent).toBe(injected);
+    });
+    expect(element.querySelector('.draft-findings li')?.textContent).toBe('8 match');
+    expect(element.querySelector('.now')?.textContent).toContain('Writing the answer');
+    expect(element.querySelector('.exchange img')).toBeNull();
+    expect(element.querySelector('.headline')).toBeNull();
+
+    release();
+    await vi.waitFor(async () => {
+      await fixture.whenStable();
+      expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
+    });
+    expect(element.querySelector('.draft')).toBeNull();
+  });
+
   it('asks for the access token after a refusal and retries with it', async () => {
     let attempts = 0;
     const api = fakeApi(async function* () {

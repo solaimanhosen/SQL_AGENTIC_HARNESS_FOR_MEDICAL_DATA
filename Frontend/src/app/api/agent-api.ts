@@ -1,7 +1,7 @@
 import { Injectable, InjectionToken, inject, signal } from '@angular/core';
 
 import { SseParser } from './sse';
-import { Answer, Health, StreamEvent } from './types';
+import { Answer, Draft, Health, StreamEvent } from './types';
 
 /** The fetch function the client uses, replaceable in tests. */
 export const FETCH = new InjectionToken<typeof fetch>('fetch', {
@@ -44,7 +44,7 @@ export class AgentApi {
 
   /**
    * Ask a question and yield each event as it arrives: the conversation first, then each
-   * step, then the answer. A failure, whether before or during the stream, throws ApiError.
+   * step, then the answer as a draft while it is written, then the complete answer. A failure, whether before or during the stream, throws ApiError.
    */
   async *askStream(
     question: string,
@@ -80,6 +80,9 @@ export class AgentApi {
               break;
             case 'step':
               yield { type: 'step', step: data };
+              break;
+            case 'answer_delta':
+              yield { type: 'draft', draft: data as Draft };
               break;
             case 'answer':
               yield { type: 'answer', answer: data as Answer };

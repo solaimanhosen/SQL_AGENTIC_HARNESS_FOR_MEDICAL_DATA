@@ -1,7 +1,7 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 
 import { AgentApi, ApiError } from '../api/agent-api';
-import { Answer, Step } from '../api/types';
+import { Answer, Draft, Step } from '../api/types';
 
 export const MAX_QUESTION_CHARS = 2000;
 
@@ -11,6 +11,8 @@ export interface Exchange {
   question: string;
   status: 'working' | 'answered' | 'failed';
   steps: Step[];
+  /** The answer so far, while it is still being written. Gone once the answer arrives. */
+  draft?: Draft;
   answer?: Answer;
   error?: ApiError;
 }
@@ -48,7 +50,7 @@ export class ChatStore {
     if (!exchange || exchange.status !== 'failed' || this.busy()) {
       return;
     }
-    this.patch(id, { status: 'working', steps: [], error: undefined });
+    this.patch(id, { status: 'working', steps: [], draft: undefined, error: undefined });
     await this.run(id, exchange.question);
   }
 
@@ -72,8 +74,10 @@ export class ChatStore {
           this.conversationId.set(event.conversationId);
         } else if (event.type === 'step') {
           this.patch(id, (exchange) => ({ steps: [...exchange.steps, event.step] }));
+        } else if (event.type === 'draft') {
+          this.patch(id, { draft: event.draft });
         } else {
-          this.patch(id, { status: 'answered', answer: event.answer });
+          this.patch(id, { status: 'answered', answer: event.answer, draft: undefined });
         }
       }
       this.needsToken.set(false);
@@ -89,7 +93,7 @@ export class ChatStore {
         // The service restarted or forgot the conversation. The next question starts anew.
         this.conversationId.set(null);
       }
-      this.patch(id, { status: 'failed', error: failure });
+      this.patch(id, { status: 'failed', error: failure, draft: undefined });
     }
   }
 

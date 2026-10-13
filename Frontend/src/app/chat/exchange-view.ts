@@ -6,8 +6,8 @@ import { StepLog } from './step-log';
 import { describeStep, queriesRun } from './steps';
 
 /**
- * One question and what became of it: the live steps while the agent works, then the answer
- * or the failure. Every string from the service is rendered through Angular interpolation,
+ * One question and what became of it: the live steps while the agent works, the answer as a
+ * draft while it is written, then the checked answer or the failure. Every string from the service is rendered through Angular interpolation,
  * which escapes it: stored data can carry injected text, and the agent is told to quote such
  * text when it reports it, so nothing here or in the views below is ever treated as HTML.
  */
@@ -22,7 +22,10 @@ export class ExchangeView {
   readonly retry = output<number>();
 
   protected readonly latestStep = computed(() => {
-    const steps = this.exchange().steps;
+    const { steps, draft } = this.exchange();
+    if (draft) {
+      return 'Writing the answer';
+    }
     return steps.length ? describeStep(steps[steps.length - 1]) : 'Reading the question';
   });
   protected readonly queriesRun = computed(() => queriesRun(this.exchange().steps));

@@ -78,8 +78,18 @@ export interface Step {
   detail: string;
 }
 
+/**
+ * The answer while the model is still writing it. It is unchecked text, with no citations,
+ * definitions or dates: those arrive only with the complete answer.
+ */
+export interface Draft {
+  headline: string;
+  findings: string[];
+}
+
 /** One event from /api/ask/stream, in the order the service sends them. */
 export type StreamEvent =
   | { type: 'conversation'; conversationId: string; turn: number }
   | { type: 'step'; step: Step }
+  | { type: 'draft'; draft: Draft }
   | { type: 'answer'; answer: Answer };

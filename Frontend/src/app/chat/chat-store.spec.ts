@@ -51,6 +51,35 @@ describe('ChatStore', () => {
     expect(second.status).toBe('answered');
   });
 
+  it('shows the answer as a draft while it is written, then replaces it', async () => {
+    let release!: () => void;
+    const { store } = setup(async function* (question) {
+      yield { type: 'conversation', conversationId: 'c'.repeat(32), turn: 1 };
+      yield { type: 'draft', draft: { headline: 'Eight pat', findings: [] } };
+      yield { type: 'draft', draft: { headline: 'Eight patients.', findings: ['8 match'] } };
+      await new Promise<void>((resolve) => (release = resolve));
+      yield { type: 'answer', answer: answerFixture({ question }) };
+    });
+
+    const pending = store.ask('How many?');
+    await vi.waitFor(() => expect(store.exchanges()[0].draft?.findings).toEqual(['8 match']));
+    expect(store.exchanges()[0].status).toBe('working');
+    release();
+    await pending;
+    expect(store.exchanges()[0].status).toBe('answered');
+    expect(store.exchanges()[0].draft).toBeUndefined();
+  });
+
+  it('drops the draft when the question fails midway', async () => {
+    const { store } = setup(async function* () {
+      yield { type: 'draft', draft: { headline: 'Eight pat', findings: [] } };
+      throw new ApiError(503, 'connection', 'Could not reach the Anthropic API.');
+    });
+    await store.ask('How many?');
+    expect(store.exchanges()[0].status).toBe('failed');
+    expect(store.exchanges()[0].draft).toBeUndefined();
+  });
+
   it('starts over after a new conversation', async () => {
     const { store, calls } = setup(answered);
     await store.ask('first');
