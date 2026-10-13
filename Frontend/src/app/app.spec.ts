@@ -1,9 +1,9 @@
 import { TestBed } from '@angular/core/testing';
 
 import { AgentApi, ApiError, UNREACHABLE } from './api/agent-api';
-import { Health, StreamEvent } from './api/types';
+import { ConversationSummary, Health, StreamEvent } from './api/types';
 import { App, EXAMPLE_QUESTIONS } from './app';
-import { answerFixture } from './testing/fixtures';
+import { answerFixture, conversationFixture, summaryFixture } from './testing/fixtures';
 
 const HEALTH: Health = {
   status: 'ok',
@@ -21,6 +21,10 @@ function fakeApi(
     token: { set: vi.fn() },
     health: vi.fn(health),
     askStream: vi.fn(stream),
+    conversations: vi.fn(async (): Promise<ConversationSummary[]> => []),
+    conversation: vi.fn(async (_id: string) => conversationFixture()),
+    renameConversation: vi.fn(async (id: string, title: string) => summaryFixture({ id, title })),
+    deleteConversation: vi.fn(async (_id: string) => undefined),
   };
 }
 
@@ -40,6 +44,9 @@ async function* answers(overrides = {}): AsyncGenerator<StreamEvent> {
 }
 
 describe('App', () => {
+  // A question puts its conversation in the address, which must not leak into the next test.
+  afterEach(() => history.replaceState(null, '', location.pathname));
+
   it('shows the service status and the example questions', async () => {
     const { element } = await render(fakeApi(answers));
     expect(element.querySelector('.status')?.textContent).toContain(
@@ -165,5 +172,96 @@ describe('App', () => {
 
     expect(api.askStream).toHaveBeenCalledWith('How many patients are there?', null);
     expect(box.value).toBe('');
+  });
+
+  describe('with stored conversations', () => {
+    const other = summaryFixture({ id: 'd'.repeat(32), title: '<b>Heart</b> disease by age' });
+
+    async function withList() {
+      const api = fakeApi(answers);
+      api.conversations.mockResolvedValue([summaryFixture(), other]);
+      const rendered = await render(api);
+      const titles = () => [
+        ...rendered.element.querySelectorAll<HTMLButtonElement>('.side .title'),
+      ];
+      return { api, titles, ...rendered };
+    }
+
+    it('lists them as plain text and opens the one that is clicked', async () => {
+      const { api, titles, fixture, element } = await withList();
+      expect(titles().map((button) => button.textContent?.trim())).toEqual([
+        'How many patients have diabetes?',
+        '<b>Heart</b> disease by age',
+      ]);
+      expect(element.querySelector('.side b')).toBeNull();
+
+      titles()[0].click();
+      await fixture.whenStable();
+
+      expect(api.conversation).toHaveBeenCalledWith('c'.repeat(32));
+      expect(element.querySelector('.question')?.textContent).toBe(
+        'How many patients have diabetes?',
+      );
+      expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
+      expect(titles()[0].getAttribute('aria-current')).toBe('true');
+      expect(location.hash).toBe('#' + 'c'.repeat(32));
+    });
+
+    it('returns to the conversation named in the address after a reload', async () => {
+      history.replaceState(null, '', '#' + 'c'.repeat(32));
+      const { api, fixture, element } = await withList();
+      await vi.waitFor(async () => {
+        await fixture.whenStable();
+        expect(element.querySelector('.headline')?.textContent).toBe(
+          'Eight patients have diabetes.',
+        );
+      });
+      expect(api.conversation).toHaveBeenCalledWith('c'.repeat(32));
+    });
+
+    it('starts a new chat, clearing the screen and the address', async () => {
+      history.replaceState(null, '', '#' + 'c'.repeat(32));
+      const { fixture, element } = await withList();
+
+      (element.querySelector('.side .new') as HTMLButtonElement).click();
+      await fixture.whenStable();
+
+      expect(element.querySelector('.question')).toBeNull();
+      expect(element.querySelector('.intro')).not.toBeNull();
+      expect(location.hash).toBe('');
+    });
+
+    it('renames a conversation from the list', async () => {
+      const { api, titles, fixture, element } = await withList();
+      const row = element.querySelectorAll('.side li')[1];
+
+      (row.querySelector('.tools button') as HTMLButtonElement).click();
+      await fixture.whenStable();
+      const input = row.querySelector('input') as HTMLInputElement;
+      expect(input.value).toBe(other.title);
+      input.value = 'Heart disease';
+      input.dispatchEvent(new Event('input'));
+      (row.querySelector('form') as HTMLFormElement).dispatchEvent(new Event('submit'));
+      await fixture.whenStable();
+
+      expect(api.renameConversation).toHaveBeenCalledWith(other.id, 'Heart disease');
+      expect(titles()[1].textContent?.trim()).toBe('Heart disease');
+    });
+
+    it('deletes a conversation only after it is confirmed', async () => {
+      const { api, titles, fixture, element } = await withList();
+      const row = element.querySelectorAll('.side li')[1];
+
+      (row.querySelectorAll('.tools button')[1] as HTMLButtonElement).click();
+      await fixture.whenStable();
+      expect(api.deleteConversation).not.toHaveBeenCalled();
+      expect(row.querySelector('.ask')?.textContent).toBe('Delete this conversation?');
+
+      (row.querySelector('.danger') as HTMLButtonElement).click();
+      await fixture.whenStable();
+
+      expect(api.deleteConversation).toHaveBeenCalledWith(other.id);
+      expect(titles().length).toBe(1);
+    });
   });
 });

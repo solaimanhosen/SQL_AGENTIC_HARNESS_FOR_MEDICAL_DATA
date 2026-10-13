@@ -1,0 +1,131 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.9rem 0.75rem;
+}
+
+.new {
+  width: 100%;
+}
+
+nav {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+ul {
+  display: grid;
+  /* Rows may shrink below a long title, so it is shortened instead of cut off. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+li {
+  border-radius: 0.5rem;
+}
+
+li:hover,
+li:focus-within,
+li.active {
+  background: var(--chip);
+}
+
+.empty {
+  margin: 0;
+  padding: 0 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.title {
+  display: block;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
+}
+
+/* A button does not shorten its own text with an ellipsis, so a span inside it does. */
+.title span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+li.active .title {
+  font-weight: 600;
+}
+
+/* Kept in the page for keyboards and screen readers, and shown for the row in use. */
+.tools {
+  display: none;
+  gap: 0.75rem;
+  padding: 0 0.6rem 0.4rem;
+}
+
+li:hover .tools,
+li:focus-within .tools,
+li.active .tools {
+  display: flex;
+}
+
+@media (hover: none) {
+  .tools {
+    display: flex;
+  }
+}
+
+.small {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-decoration: underline;
+}
+
+.small:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.small.danger {
+  color: var(--danger);
+}
+
+.rename,
+.confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  padding: 0.45rem 0.6rem;
+}
+
+.rename input {
+  flex: 1 1 100%;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.rename input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ask {
+  flex: 1 1 100%;
+  font-size: 0.85rem;
+}

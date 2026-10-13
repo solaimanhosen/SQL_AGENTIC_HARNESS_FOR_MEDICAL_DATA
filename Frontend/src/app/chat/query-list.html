@@ -26,13 +26,15 @@
           <button type="button" class="tool" (click)="copySql(query)" aria-live="polite">
             {{ copyLabel(query) }}
           </button>
-          @if (query.columns.length) {
+          @if (query.columns.length && !rowsLeftOut(query)) {
             <button type="button" class="tool" (click)="downloadCsv(query)">
               Download rows (CSV)
             </button>
           }
         </div>
-        @if (query.columns.length) {
+        @if (rowsLeftOut(query)) {
+          <p class="head">The rows were not kept with this conversation. Ask again to see them.</p>
+        } @else if (query.columns.length) {
           <app-result-table
             [columns]="query.columns"
             [rows]="query.rows"

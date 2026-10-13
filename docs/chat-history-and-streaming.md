@@ -180,8 +180,8 @@ Every new endpoint requires the access token when one is configured.
 | 2 | Backend: streamed answer draft | Done | `f9867d9` |
 | 3 | Backend: conversations stored in SQLite | Done | `ed037b1` |
 | 4 | Backend: list, open, rename and delete endpoints | Done | `e78b689` |
-| 5 | Interface: draft answer while the agent works | Done | |
-| 6 | Interface: conversation sidebar | Pending | |
+| 5 | Interface: draft answer while the agent works | Done | `85e579d` |
+| 6 | Interface: conversation sidebar | Done | |
 | 7 | Security catalogue, evaluation re-run, documentation | Pending | |
 
 ## Results

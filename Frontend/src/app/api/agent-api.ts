@@ -1,7 +1,14 @@
 import { Injectable, InjectionToken, inject, signal } from '@angular/core';
 
 import { SseParser } from './sse';
-import { Answer, Draft, Health, StreamEvent } from './types';
+import {
+  Answer,
+  ConversationDetail,
+  ConversationSummary,
+  Draft,
+  Health,
+  StreamEvent,
+} from './types';
 
 /** The fetch function the client uses, replaceable in tests. */
 export const FETCH = new InjectionToken<typeof fetch>('fetch', {
@@ -40,6 +47,31 @@ export class AgentApi {
   async health(): Promise<Health> {
     const response = await this.request('/health', { method: 'GET' });
     return (await response.json()) as Health;
+  }
+
+  /** Stored conversations, most recently used first. */
+  async conversations(): Promise<ConversationSummary[]> {
+    const response = await this.request('/conversations', { method: 'GET' });
+    return (await response.json()) as ConversationSummary[];
+  }
+
+  /** One stored conversation with every answer in it. */
+  async conversation(id: string): Promise<ConversationDetail> {
+    const response = await this.request(`/conversations/${id}`, { method: 'GET' });
+    return (await response.json()) as ConversationDetail;
+  }
+
+  async renameConversation(id: string, title: string): Promise<ConversationSummary> {
+    const response = await this.request(`/conversations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    return (await response.json()) as ConversationSummary;
+  }
+
+  async deleteConversation(id: string): Promise<void> {
+    await this.request(`/conversations/${id}`, { method: 'DELETE' });
   }
 
   /**

@@ -78,6 +78,31 @@ export interface Step {
   detail: string;
 }
 
+/** A stored conversation as the sidebar lists it. */
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  /** Questions answered in it so far. */
+  turns: number;
+}
+
+/** One answered question of a stored conversation, as it was sent when it was asked. */
+export interface StoredTurn {
+  turn: number;
+  question: string;
+  created_at: string;
+  answer: Answer;
+  steps: Step[];
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  /** True while a question is being answered, so its turn is not in `history` yet. */
+  busy: boolean;
+  history: StoredTurn[];
+}
+
 /**
  * The answer while the model is still writing it. It is unchecked text, with no citations,
  * definitions or dates: those arrive only with the complete answer.
