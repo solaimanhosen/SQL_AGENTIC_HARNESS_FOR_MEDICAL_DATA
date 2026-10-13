@@ -178,8 +178,8 @@ Every new endpoint requires the access token when one is configured.
 |---|---|---|---|
 | 1 | Branch `sql_agent/chat/dev`, this document, live check of how the answer streams | Done | `fbe26d4` |
 | 2 | Backend: streamed answer draft | Done | `f9867d9` |
-| 3 | Backend: conversations stored in SQLite | Done | |
-| 4 | Backend: list, open, rename and delete endpoints | Pending | |
+| 3 | Backend: conversations stored in SQLite | Done | `ed037b1` |
+| 4 | Backend: list, open, rename and delete endpoints | Done | |
 | 5 | Interface: draft answer while the agent works | Pending | |
 | 6 | Interface: conversation sidebar | Pending | |
 | 7 | Security catalogue, evaluation re-run, documentation | Pending | |

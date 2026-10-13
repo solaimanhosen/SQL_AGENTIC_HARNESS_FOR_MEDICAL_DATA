@@ -27,12 +27,12 @@ import logging
 import secrets
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Literal
 
 import anthropic
 import anyio
-from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Path, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -45,7 +45,13 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .agent import AgentError, AgentResult, SqlAgent, Turn, describe_failure
 from .answer import Draft, describe_window
-from .conversations import ConversationBusy, ConversationStore, UnknownConversation
+from .conversations import (
+    MAX_TITLE_CHARS,
+    ConversationBusy,
+    ConversationStore,
+    ConversationSummary,
+    UnknownConversation,
+)
 from .limits import LimitExceeded, Reservation, SpendingLimits
 from .requestlog import RequestLogMiddleware
 from .runlog import log_run
@@ -161,6 +167,42 @@ class TableOut(BaseModel):
     notes: list[str]
 
 
+class StepOut(BaseModel):
+    kind: str
+    detail: str
+
+
+class ConversationOut(BaseModel):
+    id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    turns: int
+    """Questions answered in it so far."""
+
+
+class StoredTurnOut(BaseModel):
+    turn: int
+    question: str
+    created_at: datetime
+    answer: AnswerOut
+    """The answer as it was sent when the question was asked."""
+    steps: list[StepOut]
+
+
+class ConversationDetailOut(ConversationOut):
+    busy: bool
+    """True while a question is being answered, so its turn is not stored yet."""
+    history: list[StoredTurnOut]
+
+
+class RenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=MAX_TITLE_CHARS, pattern=r"\S")
+
+
+ConversationId = Path(pattern=CONVERSATION_ID_PATTERN)
+
+
 class ErrorOut(BaseModel):
     error: str
     message: str
@@ -215,7 +257,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(agent.settings.cors_origins),
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type", "Authorization"],
     )
     if agent.settings.request_log_path is not None:
@@ -273,7 +315,7 @@ def create_app(
 
     @app.exception_handler(UnknownConversation)
     async def unknown_conversation(_: Request, exc: UnknownConversation) -> JSONResponse:
-        return _error(404, "unknown_conversation", "This conversation has expired or never existed. Start a new one.")
+        return _error(404, "unknown_conversation", "This conversation was deleted or never existed. Start a new one.")
 
     @app.exception_handler(ConversationBusy)
     async def busy_conversation(_: Request, exc: ConversationBusy) -> JSONResponse:
@@ -304,6 +346,35 @@ def create_app(
     @protected.get("/api/definitions")
     def definitions() -> list[DefinitionOut]:
         return [definition_payload(agent.layer, name) for name in agent.layer.definitions]
+
+    @protected.get("/api/conversations")
+    def list_conversations() -> list[ConversationOut]:
+        """Conversations with at least one answer, most recently used first."""
+        return [_conversation_out(summary) for summary in conversations.list()]
+
+    @protected.get("/api/conversations/{conversation_id}")
+    def get_conversation(conversation_id: str = ConversationId) -> ConversationDetailOut:
+        stored = conversations.get(conversation_id)
+        return ConversationDetailOut(
+            **_conversation_out(stored.summary).model_dump(),
+            busy=stored.busy,
+            history=[
+                StoredTurnOut(
+                    turn=turn.turn, question=turn.question, created_at=turn.created_at, answer=turn.answer, steps=turn.steps
+                )
+                for turn in stored.turns
+                if turn.answer is not None
+            ],
+        )
+
+    @protected.patch("/api/conversations/{conversation_id}")
+    def rename_conversation(request: RenameRequest, conversation_id: str = ConversationId) -> ConversationOut:
+        return _conversation_out(conversations.rename(conversation_id, request.title))
+
+    @protected.delete("/api/conversations/{conversation_id}", status_code=204)
+    def delete_conversation(conversation_id: str = ConversationId) -> Response:
+        conversations.delete(conversation_id)
+        return Response(status_code=204)
 
     @protected.post("/api/ask")
     async def ask(request: AskRequest) -> AnswerOut:
@@ -419,6 +490,16 @@ async def _run(
                 output_tokens=result.output_tokens,
             )
         limits.settle(claim.reservation, result.input_tokens + result.output_tokens if result else None)
+
+
+def _conversation_out(summary: ConversationSummary) -> ConversationOut:
+    return ConversationOut(
+        id=summary.id,
+        title=summary.title,
+        created_at=summary.created_at,
+        updated_at=summary.updated_at,
+        turns=summary.turn_count,
+    )
 
 
 def _stored_answer(answer: AnswerOut, *, keep_rows: bool) -> dict:

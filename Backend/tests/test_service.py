@@ -357,7 +357,14 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 @pytest.mark.parametrize(
     "method,path",
-    [("get", "/api/schema"), ("get", "/api/definitions"), ("get", "/api/usage"), ("post", "/api/ask"), ("post", "/api/ask/stream")],
+    [
+        ("get", "/api/schema"),
+        ("get", "/api/definitions"),
+        ("get", "/api/usage"),
+        ("get", "/api/conversations"),
+        ("post", "/api/ask"),
+        ("post", "/api/ask/stream"),
+    ],
 )
 def test_with_a_token_configured_every_endpoint_but_health_requires_it(settings, db, method, path):
     client, agent = _client(settings, db, api_token=TOKEN)
@@ -515,3 +522,82 @@ def test_a_conversation_budget_is_not_reset_by_a_restart(settings, db, tmp_path)
     response = restarted.post("/api/ask", json={"question": "again", "conversation_id": conversation_id})
     assert response.status_code == 429 and response.json()["error"] == "conversation_budget"
     assert agent.questions == []
+
+
+def _ask(client, question="How many have diabetes?", conversation_id=None, **kwargs):
+    payload = {"question": question} | ({"conversation_id": conversation_id} if conversation_id else {})
+    return client.post("/api/ask", json=payload, **kwargs).json()
+
+
+def test_conversations_are_listed_most_recently_used_first(settings, db):
+    client, _ = _client(settings, db)
+    assert client.get("/api/conversations").json() == []
+    first = _ask(client)["conversation_id"]
+    second = _ask(client, "Which age band has the most visits?")["conversation_id"]
+    _ask(client, "And heart disease?", first)
+    listed = client.get("/api/conversations").json()
+    assert [(item["id"], item["title"], item["turns"]) for item in listed] == [
+        (first, "How many have diabetes?", 2),
+        (second, "Which age band has the most visits?", 1),
+    ]
+    assert listed[0]["updated_at"] > listed[0]["created_at"]
+
+
+def test_a_stored_conversation_is_returned_with_every_answer_as_it_was_sent(settings, db):
+    client, _ = _client(settings, db)
+    asked = _ask(client)
+    followed = _ask(client, "And heart disease?", asked["conversation_id"])
+    body = client.get(f"/api/conversations/{asked['conversation_id']}").json()
+    assert body["title"] == "How many have diabetes?" and body["turns"] == 2 and body["busy"] is False
+    assert [turn["answer"] for turn in body["history"]] == [asked, followed]
+    assert body["history"][0]["steps"][0] == {"kind": "sql", "detail": "SELECT COUNT(*) AS n FROM conditions"}
+    assert body["history"][0]["answer"]["definitions_used"][0]["status"] == "assumed"
+
+
+def test_a_conversation_can_be_renamed_and_deleted(settings, db):
+    client, agent = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    renamed = client.patch(f"/api/conversations/{conversation_id}", json={"title": "Diabetes counts"})
+    assert renamed.status_code == 200 and renamed.json()["title"] == "Diabetes counts"
+    for title in ("", "   ", "x" * 101):
+        assert client.patch(f"/api/conversations/{conversation_id}", json={"title": title}).status_code == 422
+
+    assert client.delete(f"/api/conversations/{conversation_id}").status_code == 204
+    assert client.get("/api/conversations").json() == []
+    for response in (
+        client.get(f"/api/conversations/{conversation_id}"),
+        client.delete(f"/api/conversations/{conversation_id}"),
+        client.patch(f"/api/conversations/{conversation_id}", json={"title": "x"}),
+        client.post("/api/ask", json={"question": "q", "conversation_id": conversation_id}),
+    ):
+        assert response.status_code == 404 and response.json()["error"] == "unknown_conversation"
+    assert len(agent.questions) == 1
+
+
+def test_a_conversation_still_answering_cannot_be_deleted(settings, db):
+    store = ConversationStore()
+    client, _ = _client(settings, db, conversations=store)
+    conversation_id, _, _ = store.begin(None)
+    response = client.delete(f"/api/conversations/{conversation_id}")
+    assert response.status_code == 409 and response.json()["error"] == "busy"
+    assert client.get(f"/api/conversations/{conversation_id}").json()["busy"] is True
+
+
+@pytest.mark.parametrize("method", ["get", "patch", "delete"])
+def test_managing_a_conversation_requires_the_token_and_a_well_formed_id(settings, db, method):
+    client, _ = _client(settings, db, api_token=TOKEN)
+    conversation_id = _ask(client, headers=AUTH)["conversation_id"]
+    kwargs = {"json": {"title": "x"}} if method == "patch" else {}
+    assert getattr(client, method)(f"/api/conversations/{conversation_id}", **kwargs).status_code == 401
+    assert getattr(client, method)("/api/conversations/not-an-id", headers=AUTH, **kwargs).status_code == 422
+    assert getattr(client, method)(f"/api/conversations/{conversation_id}", headers=AUTH, **kwargs).status_code in (200, 204)
+
+
+def test_the_browser_may_rename_and_delete_from_the_configured_origin(settings, db):
+    client, _ = _client(settings, db)
+    for method in ("PATCH", "DELETE"):
+        response = client.options(
+            "/api/conversations/" + "0" * 32,
+            headers={"Origin": "http://localhost:4200", "Access-Control-Request-Method": method},
+        )
+        assert response.status_code == 200 and method in response.headers["access-control-allow-methods"]
