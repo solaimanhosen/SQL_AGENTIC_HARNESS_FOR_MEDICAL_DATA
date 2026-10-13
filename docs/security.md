@@ -92,9 +92,20 @@ a sign the source text had been tampered with.
   It suits a demonstration. Real accounts are deferred until the rest of the plan is done.
 - **The token travels in the clear without TLS.** The service speaks plain HTTP. A deployed
   instance must sit behind HTTPS, such as a reverse proxy or a platform's own front end.
-- **Limits and conversations live in memory.** A restart resets the day's spending and
-  forgets every conversation. With several server processes, each keeps its own ledger, so
-  the effective budget multiplies. One process is the supported deployment for now.
+- **The daily budget lives in memory.** A restart resets the day's spending. With several
+  server processes, each keeps its own ledger, so the effective budget multiplies, and each
+  would let the same conversation answer two questions at once. One process is the
+  supported deployment for now. A conversation's own budget is stored with it.
+- **Conversations are stored on disk, with result rows.** `Backend/data/conversations.db`
+  holds every question, answer, SQL statement and the rows each query returned, so a
+  reopened conversation can show its evidence. It is git-ignored and unencrypted. With real
+  data it is a copy of query results and needs the same handling as the database. Setting
+  `SQL_AGENT_STORE_RESULT_ROWS=false` stores answers without rows, though the answer text
+  still states figures, and `SQL_AGENT_CONVERSATIONS_PATH=off` stores nothing. Deleting a
+  conversation removes its rows from the database file, but not from backups or the run log.
+- **Everyone holding the token sees every conversation.** There are no accounts, so the
+  list is shared, and anyone with the token can read, rename or delete any conversation.
+  The `owner` column is in place for when accounts exist.
 - **The budget is counted in tokens, not money.** The figures in the evaluation give the
   cost of a typical question. Set the daily budget with the model's current price in mind.
 - **Browser storage of the token is the interface's problem.** The web interface will need

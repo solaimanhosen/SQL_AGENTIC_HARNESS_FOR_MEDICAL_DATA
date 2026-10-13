@@ -54,6 +54,21 @@ same number of rows afterwards.
 See the table below, measured on the date shown. Rerun the harness after any change to the
 prompt, the definitions or the model.
 
+### After streamed answers, 13 October 2026, Claude Opus 5
+
+The agent now runs with LangChain's streaming interface, so the answer text can be shown
+while it is written. The prompt, the tools and the checks did not change. The whole set was
+rerun to confirm the answers did not either.
+
+| Measure | Value |
+|---|---|
+| Questions passed | 20 of 20 |
+| Queries per question | 1 to 6 |
+| Time per question | 7 to 29 seconds |
+| Total cost of a full run | 417,750 input and 23,739 output tokens over 5.4 minutes, earlier questions of follow-ups included |
+
+Every dimension passed, including 20 traceability checks.
+
 ### After follow-up questions, 28 September 2026, Claude Opus 5
 
 The prompt changed in Step 9: earlier answers are context, and every stated figure must

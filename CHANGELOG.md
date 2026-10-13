@@ -3,6 +3,35 @@
 Notable changes to this project, newest first. Versions follow the project milestones:
 v1 is the backend, v2 adds the web interface.
 
+## v2.1.0 — unreleased
+
+Conversations are kept, and answers appear as they are written. The design and the reasons
+behind it are in `docs/chat-history-and-streaming.md`.
+
+### Added
+
+- Stored conversations. Every question and answer is saved to its own SQLite file,
+  `Backend/data/conversations.db`, so conversations survive a restart. New endpoints list
+  them, return one in full, rename it and delete it.
+- A conversation sidebar in the interface: start a new chat, reopen an earlier one with
+  every answer, table and step as it was, carry on asking, rename and delete. It becomes a
+  drawer at phone width, and the open conversation is kept in the address so a reload
+  returns to it.
+- Streamed answers. The headline and findings appear as a draft while the model writes
+  them, through a new `answer_delta` event on `/api/ask/stream`. The checked answer, with
+  its citations, definitions and dates, replaces the draft.
+- If the browser loses the stream, the interface fetches the finished answer from the
+  service instead of showing a failure.
+- Settings `SQL_AGENT_CONVERSATIONS_PATH` and `SQL_AGENT_STORE_RESULT_ROWS`.
+
+### Changed
+
+- The agent runs with LangChain's streaming interface. Its answers, checks and safety
+  layers are unchanged.
+- A conversation's token budget is stored with it, so a restart no longer resets it.
+- The model still sees only the last six turns of a conversation, however long it grows.
+- "New conversation" moved from the header into the sidebar as "New chat".
+
 ## v2.0.0 — 9 October 2026
 
 The web interface. Ask a question in a browser, watch the agent work, and read an answer

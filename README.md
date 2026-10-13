@@ -25,8 +25,9 @@ patients, so no real patient data is involved.
 4. **Explain.** It returns a structured answer in which every figure cites its query. The
    system compares the answer with what actually ran and flags anything it cannot trace.
 
-Follow-up questions build on the conversation, and each step appears live while the agent
-works.
+Follow-up questions build on the conversation, each step appears live while the agent
+works, and the answer appears as a draft while it is written. Conversations are stored, so
+an earlier one can be reopened from the sidebar and continued.
 
 ## Repository layout
 
@@ -81,6 +82,7 @@ answers against the data, for free.
 | v1.0.0 | The backend: agent, safety layers, semantic layer, traceable answers, evaluation, security review |
 | v1.1.0 | The HTTP service: follow-up questions, live steps, access token, spending limits |
 | v2.0.0 | The web interface: chat, live steps, transparency panels, result tables, CSV and JSON downloads |
+| v2.1.0 | Stored conversations with a sidebar to reopen, rename and delete them, and answers streamed as they are written |
 
 Still to come: analytics and charts over query results, self-contained HTML reports, a
 PostgreSQL design, and deployment.

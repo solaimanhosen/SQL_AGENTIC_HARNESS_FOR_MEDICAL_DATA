@@ -174,6 +174,9 @@ Every new endpoint requires the access token when one is configured.
 
 ## Status
 
+All seven steps are done on the branch `sql_agent/chat/dev`. It is not yet merged into
+`main` or tagged v2.1.0.
+
 | Step | What | Status | Commit |
 |---|---|---|---|
 | 1 | Branch `sql_agent/chat/dev`, this document, live check of how the answer streams | Done | `fbe26d4` |
@@ -181,15 +184,78 @@ Every new endpoint requires the access token when one is configured.
 | 3 | Backend: conversations stored in SQLite | Done | `ed037b1` |
 | 4 | Backend: list, open, rename and delete endpoints | Done | `e78b689` |
 | 5 | Interface: draft answer while the agent works | Done | `85e579d` |
-| 6 | Interface: conversation sidebar | Done | |
-| 7 | Security catalogue, evaluation re-run, documentation | Pending | |
+| 6 | Interface: conversation sidebar | Done | `a114e12` |
+| 7 | Security catalogue, evaluation re-run, documentation | Done | the commit after `a114e12` |
 
 ## Results
 
-Filled in when the work is finished: test counts, the evaluation score, the security
-catalogue, and how soon the first answer text appears.
+Measured on 13 October 2026 with Claude Opus 5.
+
+| Check | v2.0.0 | v2.1.0 |
+|---|---|---|
+| Backend tests, no network | 238 passed | 272 passed |
+| Interface tests, no network | 53 passed | 71 passed |
+| Security catalogue | 35 of 35 | 35 of 35 |
+| Evaluation | 20 of 20 | 20 of 20 |
+| Evaluation cost | 433,148 in, 24,012 out, 6.3 minutes | 417,750 in, 23,739 out, 5.4 minutes |
+| New dependencies | | None |
+
+How soon answer text appears, from four questions asked through the interface in headless
+Chrome:
+
+| Question | First draft text | Checked answer |
+|---|---|---|
+| How many patients have diabetes? | 6.4 s | 9.9 s |
+| And how many of them are women? (follow-up) | 6.7 s | 8.8 s |
+| The same follow-up again | 8.9 s | 12.7 s |
+| How many patients are in the database? | 4.6 s | 7.6 s |
+
+The draft appears 2 to 4 seconds before the checked answer. Most of the wait before it is
+the agent running queries, which the live steps already show. Streaming shortens the last
+part of the wait. It does not make the whole run faster.
+
+Checked by hand in the browser, against a real service:
+
+- A conversation was reopened after the service was restarted, with its tables and rows,
+  and a follow-up ("And how many of them are women?") was answered from the earlier turn:
+  "Just 1 of the 8 diabetic patients is a woman."
+- Reloading the page returned to the same conversation.
+- New chat, rename and delete worked, and deleting the open conversation cleared the screen.
+- At phone width (390 px) the page did not scroll sideways, and the sidebar opened as a
+  drawer.
 
 ## Demo notes
 
-Filled in when the work is finished: what to show live, in what order, and what to say
-about the limits.
+A suggested order for showing this live, about three minutes:
+
+1. **Start with the sidebar already holding two or three conversations.** Say that in
+   Demo 1 a restart or a reload lost everything.
+2. **Ask "How many patients have diabetes?"** Point at the live steps, then at the draft
+   text appearing, labelled as a draft, then at the citations and definition statuses
+   arriving with the checked answer. This is the point to make: the text is early, the
+   evidence is never early.
+3. **Ask the follow-up "And how many of them are women?"** It shows the earlier turn is in
+   the model's context, and that the follow-up ran its own query.
+4. **Stop and start the service in the terminal, then reload the page.** The conversation
+   is still there, tables included. Ask one more follow-up to show it continues.
+5. **Open an older conversation from the sidebar**, rename it, and delete another.
+6. **Optionally narrow the window to phone width** to show the drawer.
+
+Lines worth having ready:
+
+- "Conversations are stored in a separate SQLite file. The patient database stays
+  read-only."
+- "The model sees the last six turns, not the whole history, so a long conversation does
+  not cost more per question."
+- "No new dependencies, and the evaluation is still 20 of 20."
+
+Limits to state if asked:
+
+- Everyone with the token sees every conversation. Accounts come later.
+- Stored answers include result rows. That is fine for synthetic data and is a decision to
+  make before real patient data; a setting turns it off.
+- The draft arrives only once the model starts writing, a few seconds before the end.
+- A reopened answer is a snapshot of the day it was given.
+
+Screenshots for slides can be taken from the running interface: the draft state, an
+answered conversation with the sidebar, and the phone-width drawer.
