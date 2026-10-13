@@ -10,8 +10,9 @@ Run it from the Backend folder:
     .venv/bin/python -m sql_agent.serve
 
 The agent runs in a worker thread, so a slow question does not block health checks or
-other requests. Questions can belong to a conversation, so a follow-up such as "what about
-heart disease?" is understood, and `/api/ask/stream` sends each step as it happens.
+other requests. Questions belong to a conversation, so a follow-up such as "what about
+heart disease?" is understood, and `/api/ask/stream` sends each step as it happens, then
+the answer as it is written. Conversations are stored, so they can be listed and reopened.
 
 When a shared token is configured, every endpoint except health requires it. Request bodies
 are capped, and the limits in limits.py refuse a question before it reaches the model when
@@ -197,7 +198,7 @@ def create_app(
     `api_token` set, every endpoint except health requires it as a bearer token.
     """
     agent = agent or SqlAgent()
-    conversations = ConversationStore() if conversations is None else conversations
+    conversations = ConversationStore(agent.settings.conversations_path) if conversations is None else conversations
     limits = SpendingLimits.from_settings(agent.settings) if limits is None else limits
     # Streaming runs outlive their connection, so they are held here until they finish.
     background: set[asyncio.Task] = set()
@@ -362,7 +363,7 @@ def _claim(conversations: ConversationStore, limits: SpendingLimits, conversatio
     """Claim the conversation, then the budget, releasing the conversation if that fails."""
     conversation_id, history, turn = conversations.begin(conversation_id)
     try:
-        reservation = limits.reserve(conversation_id)
+        reservation = limits.reserve(conversation_id, already_spent=conversations.tokens_spent(conversation_id))
     except LimitExceeded:
         conversations.finish(conversation_id, None)
         raise
@@ -390,16 +391,43 @@ async def _run(
     on_event: Callable[[str, str], None] | None = None,
     on_draft: Callable[[Draft], None] | None = None,
 ) -> AnswerOut:
-    """Answer one claimed question, then release its conversation and settle its budget."""
-    result = None
+    """Answer one claimed question, then store it, release its conversation and settle its budget."""
+    result = answer = None
+    steps: list[dict] = []
+
+    def record_step(kind: str, detail: str) -> None:
+        steps.append({"kind": kind, "detail": detail})
+        if on_event is not None:
+            on_event(kind, detail)
+
     try:
         result = await anyio.to_thread.run_sync(
-            _answer_and_log, agent, question, claim.history, claim.conversation_id, on_event, on_draft
+            _answer_and_log, agent, question, claim.history, claim.conversation_id, record_step, on_draft
         )
-        return answer_payload(result, agent.layer, conversation_id=claim.conversation_id, turn=claim.turn)
+        answer = answer_payload(result, agent.layer, conversation_id=claim.conversation_id, turn=claim.turn)
+        return answer
     finally:
-        conversations.finish(claim.conversation_id, result.as_turn() if result else None)
+        if answer is None:
+            conversations.finish(claim.conversation_id, None)
+        else:
+            conversations.finish(
+                claim.conversation_id,
+                result.as_turn(),
+                answer=_stored_answer(answer, keep_rows=agent.settings.store_result_rows),
+                steps=steps,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+            )
         limits.settle(claim.reservation, result.input_tokens + result.output_tokens if result else None)
+
+
+def _stored_answer(answer: AnswerOut, *, keep_rows: bool) -> dict:
+    """The answer as it is kept with its conversation, with or without the rows behind it."""
+    stored = answer.model_dump(mode="json")
+    if not keep_rows:
+        for query in stored["queries"]:
+            query["rows"] = []
+    return stored
 
 
 def _answer_and_log(

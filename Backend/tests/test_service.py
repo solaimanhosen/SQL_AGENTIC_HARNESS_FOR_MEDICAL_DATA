@@ -85,6 +85,7 @@ def settings(sample_db_path, tmp_path):
         db_path=sample_db_path,
         log_path=tmp_path / "runs.jsonl",
         request_log_path=tmp_path / "requests.jsonl",
+        conversations_path=None,
     )
 
 
@@ -467,4 +468,50 @@ def test_a_body_that_hides_its_length_is_still_cut_off(settings, db):
 
     response = client.post("/api/ask", content=chunks(), headers={"Content-Type": "application/json"})
     assert response.status_code == 413 and response.json()["error"] == "too_large"
+    assert agent.questions == []
+
+
+def test_an_answered_question_is_stored_with_its_rows_and_steps(settings, db):
+    store = ConversationStore()
+    client, _ = _client(settings, db, conversations=store)
+    body = client.post("/api/ask", json={"question": "How many have diabetes?"}).json()
+    (turn,) = store.get(body["conversation_id"]).turns
+    assert turn.answer == body
+    assert turn.answer["queries"][0]["rows"] == [[8]]
+    assert turn.steps == [
+        {"kind": "sql", "detail": "SELECT COUNT(*) AS n FROM conditions"},
+        {"kind": "sql_result", "detail": "1 rows in 3 ms"},
+    ]
+    assert store.tokens_spent(body["conversation_id"]) == 1350
+
+
+def test_result_rows_can_be_left_out_of_what_is_stored(settings, db):
+    store = ConversationStore()
+    client, _ = _client(dataclasses.replace(settings, store_result_rows=False), db, conversations=store)
+    body = client.post("/api/ask", json={"question": "How many have diabetes?"}).json()
+    assert body["queries"][0]["rows"] == [[8]], "the asker still gets the rows"
+    stored = store.get(body["conversation_id"]).turns[0].answer["queries"][0]
+    assert stored["rows"] == [] and stored["row_count"] == 1 and stored["sql"]
+
+
+def test_a_conversation_is_continued_after_the_service_restarts(settings, db, tmp_path):
+    settings = dataclasses.replace(settings, conversations_path=tmp_path / "conversations.db")
+    client, _ = _client(settings, db)
+    conversation_id = client.post("/api/ask", json={"question": "How many have diabetes?"}).json()["conversation_id"]
+
+    restarted, agent = _client(settings, db)
+    body = restarted.post("/api/ask", json={"question": "And heart disease?", "conversation_id": conversation_id}).json()
+    assert body["turn"] == 2
+    assert agent.histories[0][0].question == "How many have diabetes?"
+
+
+def test_a_conversation_budget_is_not_reset_by_a_restart(settings, db, tmp_path):
+    settings = dataclasses.replace(settings, conversations_path=tmp_path / "conversations.db", conversation_token_budget=100_000)
+    client, _ = _client(settings, db)
+    conversation_id = client.post("/api/ask", json={"question": "q"}).json()["conversation_id"]
+    ConversationStore(settings.conversations_path)._db.execute("UPDATE conversations SET tokens_spent = 90000")
+
+    restarted, agent = _client(settings, db)
+    response = restarted.post("/api/ask", json={"question": "again", "conversation_id": conversation_id})
+    assert response.status_code == 429 and response.json()["error"] == "conversation_budget"
     assert agent.questions == []

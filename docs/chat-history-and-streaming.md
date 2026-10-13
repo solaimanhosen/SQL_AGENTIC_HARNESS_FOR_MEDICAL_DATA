@@ -47,6 +47,10 @@ Each turn stores two things for two different readers:
 - **For the model:** the answer text with citations removed, and the SQL that succeeded.
   This is what a follow-up question is shown.
 
+At most 1,000 conversations are kept. Beyond that the least recently used one is removed,
+which bounds the disk the service can fill. Setting `SQL_AGENT_CONVERSATIONS_PATH=off`
+keeps conversations in memory only, as v2.0.0 did.
+
 ### What the model sees in a long conversation
 
 The whole conversation is kept on disk and shown on screen, but the model is shown only the
@@ -173,8 +177,8 @@ Every new endpoint requires the access token when one is configured.
 | Step | What | Status | Commit |
 |---|---|---|---|
 | 1 | Branch `sql_agent/chat/dev`, this document, live check of how the answer streams | Done | `fbe26d4` |
-| 2 | Backend: streamed answer draft | Done | |
-| 3 | Backend: conversations stored in SQLite | Pending | |
+| 2 | Backend: streamed answer draft | Done | `f9867d9` |
+| 3 | Backend: conversations stored in SQLite | Done | |
 | 4 | Backend: list, open, rename and delete endpoints | Pending | |
 | 5 | Interface: draft answer while the agent works | Pending | |
 | 6 | Interface: conversation sidebar | Pending | |
