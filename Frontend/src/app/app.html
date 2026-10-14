@@ -8,7 +8,26 @@
   (open)="open($event)"
   (rename)="store.rename($event.id, $event.title)"
   (remove)="store.remove($event)"
+  (collapse)="hideSidebar()"
 />
+<div
+  class="resizer"
+  role="separator"
+  tabindex="0"
+  aria-label="Resize the conversation list"
+  aria-orientation="vertical"
+  [attr.aria-valuenow]="sideWidth()"
+  [attr.aria-valuemin]="sideMin"
+  [attr.aria-valuemax]="sideMax()"
+  title="Drag to resize. Double-click to reset."
+  (pointerdown)="startResize($event)"
+  (pointermove)="resize($event)"
+  (pointerup)="endResize()"
+  (pointercancel)="endResize()"
+  (lostpointercapture)="endResize()"
+  (dblclick)="resetWidth()"
+  (keydown)="resizeWithKey($event)"
+></div>
 @if (menuOpen()) {
   <button
     type="button"
@@ -24,10 +43,23 @@
       type="button"
       class="secondary menu"
       aria-label="Show conversations"
+      title="Show conversations"
       [attr.aria-expanded]="menuOpen()"
-      (click)="menuOpen.set(true)"
+      (click)="showSidebar()"
     >
-      ☰
+      <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+        <rect
+          x="2.5"
+          y="3.5"
+          width="15"
+          height="13"
+          rx="2"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+        />
+        <path d="M7.5 3.5v13" stroke="currentColor" stroke-width="1.5" />
+      </svg>
     </button>
     <div class="title">
       <h1>Patient data questions</h1>

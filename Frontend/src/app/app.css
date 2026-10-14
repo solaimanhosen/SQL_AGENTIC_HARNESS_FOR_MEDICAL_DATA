@@ -1,16 +1,75 @@
 :host {
+  /* Never more than half the window, whatever width was saved on a larger screen. */
+  --side-track: min(var(--side-width, 17rem), 50vw);
   display: grid;
   /* The page column may shrink below its content, so a wide table scrolls inside it. */
-  grid-template-columns: 17rem minmax(0, 1fr);
+  grid-template-columns: var(--side-track) minmax(0, 1fr);
   min-height: 100dvh;
+  transition: grid-template-columns 0.2s ease;
+}
+
+:host(.collapsed) {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+/* While dragging, the width follows the pointer at once, and text is not selected. */
+:host(.resizing) {
+  transition: none;
+  cursor: col-resize;
+  user-select: none;
 }
 
 .side {
   position: sticky;
   top: 0;
   height: 100dvh;
+  overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--surface);
+  transition: visibility 0.2s;
+}
+
+:host(.collapsed) .side {
+  visibility: hidden;
+  padding-inline: 0;
+  border-right: 0;
+}
+
+/* The right edge of the sidebar, wide enough to grab, drawn as a line on hover or focus. */
+.resizer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--side-track) - 4px);
+  z-index: 2;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.resizer:hover::after,
+.resizer:focus-visible::after,
+:host(.resizing) .resizer::after {
+  background: var(--accent);
+}
+
+.resizer:focus-visible {
+  outline: none;
+}
+
+:host(.collapsed) .resizer {
+  display: none;
 }
 
 .page {
@@ -23,14 +82,32 @@
   margin: 0 auto;
 }
 
-.menu,
 .backdrop {
   display: none;
 }
 
+.menu {
+  display: none;
+  padding: 0.35rem 0.5rem;
+  line-height: 0;
+}
+
+:host(.collapsed) .menu {
+  display: block;
+}
+
 @media (max-width: 48rem) {
-  :host {
+  :host,
+  :host(.collapsed) {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .resizer {
+    display: none;
+  }
+
+  :host(.collapsed) .side {
+    border-right: 1px solid var(--border);
   }
 
   .side {
@@ -45,7 +122,8 @@
       visibility 0.2s;
   }
 
-  .side.open {
+  .side.open,
+  :host(.collapsed) .side.open {
     visibility: visible;
     transform: none;
   }
@@ -63,11 +141,11 @@
 
   .menu {
     display: block;
-    padding: 0.35rem 0.7rem;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  :host,
   .side {
     transition: none;
   }

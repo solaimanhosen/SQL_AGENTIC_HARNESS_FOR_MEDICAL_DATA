@@ -264,4 +264,81 @@ describe('App', () => {
       expect(titles().length).toBe(1);
     });
   });
+
+  describe('sidebar size', () => {
+    beforeEach(() => localStorage.removeItem('sql-agent.sidebar'));
+    afterEach(() => localStorage.removeItem('sql-agent.sidebar'));
+
+    const host = (element: HTMLElement) => element as HTMLElement;
+    const width = (element: HTMLElement) => host(element).style.getPropertyValue('--side-width');
+
+    it('collapses and expands without touching the conversation', async () => {
+      const api = fakeApi(answers);
+      const { fixture, element } = await render(api);
+      (element.querySelector('.example') as HTMLButtonElement).click();
+      await fixture.whenStable();
+
+      (element.querySelector('.side .hide') as HTMLButtonElement).click();
+      await fixture.whenStable();
+      expect(element.classList).toContain('collapsed');
+      expect(JSON.parse(localStorage.getItem('sql-agent.sidebar')!).collapsed).toBe(true);
+      expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
+
+      (element.querySelector('.menu') as HTMLButtonElement).click();
+      await fixture.whenStable();
+      expect(element.classList).not.toContain('collapsed');
+      expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
+      expect(api.askStream).toHaveBeenCalledTimes(1);
+      expect(api.conversation).not.toHaveBeenCalled();
+    });
+
+    it('is resized by dragging its edge, within limits, and remembers the width', async () => {
+      const { fixture, element } = await render(fakeApi(answers));
+      const edge = element.querySelector('.resizer') as HTMLElement;
+      expect(width(element)).toBe('272px');
+
+      edge.dispatchEvent(new MouseEvent('pointerdown', { button: 0, clientX: 272 }));
+      edge.dispatchEvent(new MouseEvent('pointermove', { clientX: 350 }));
+      await fixture.whenStable();
+      expect(element.classList).toContain('resizing');
+      expect(width(element)).toBe('350px');
+
+      edge.dispatchEvent(new MouseEvent('pointermove', { clientX: 20 }));
+      edge.dispatchEvent(new MouseEvent('pointerup'));
+      await fixture.whenStable();
+      expect(element.classList).not.toContain('resizing');
+      expect(width(element)).toBe('200px');
+      expect(edge.getAttribute('aria-valuenow')).toBe('200');
+
+      edge.dispatchEvent(new MouseEvent('pointermove', { clientX: 400 }));
+      await fixture.whenStable();
+      expect(width(element)).toBe('200px');
+      expect(JSON.parse(localStorage.getItem('sql-agent.sidebar')!).width).toBe(200);
+    });
+
+    it('is resized with the keyboard and reset with a double-click', async () => {
+      const { fixture, element } = await render(fakeApi(answers));
+      const edge = element.querySelector('.resizer') as HTMLElement;
+
+      edge.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+      edge.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+      await fixture.whenStable();
+      expect(width(element)).toBe('304px');
+
+      edge.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home' }));
+      await fixture.whenStable();
+      expect(width(element)).toBe('200px');
+
+      edge.dispatchEvent(new MouseEvent('dblclick'));
+      await fixture.whenStable();
+      expect(width(element)).toBe('272px');
+    });
+
+    it('opens at the size and state it was left in', async () => {
+      localStorage.setItem('sql-agent.sidebar', JSON.stringify({ width: 330, collapsed: true }));
+      const { element } = await render(fakeApi(answers));
+      expect(width(element)).toBe('330px');
+      expect(element.classList).toContain('collapsed');
+    });
+  });
 });

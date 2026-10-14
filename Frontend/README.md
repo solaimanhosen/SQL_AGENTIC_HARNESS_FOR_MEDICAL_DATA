@@ -46,7 +46,8 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/api/agent-api.ts` | Calls the service. Reads `/api/ask/stream` with `fetch`, because the browser's `EventSource` cannot send a POST or a token. |
 | `src/app/api/sse.ts` | Parses server-sent events from text chunks that can split anywhere. |
 | `src/app/chat/chat-store.ts` | The conversation on screen and the list of stored ones: each question, its live steps, its draft and its answer. Opens, renames and deletes stored conversations, and fetches an answer from the service if only the stream was lost. |
-| `src/app/chat/sidebar.*` | The conversation list: new chat, reopen, rename, delete. A drawer at phone width. |
+| `src/app/chat/sidebar.*` | The conversation list: new chat, reopen, rename, delete, hide. A drawer at phone width. |
+| `src/app/sidebar-layout.ts` | The sidebar's width limits, and remembering its width and collapsed state in local storage. |
 | `src/app/chat/exchange-view.*` | One question and what became of it: the live steps, the answer as a draft while it is written, then the checked answer or the failure. |
 | `src/app/chat/answer-view.*` | The answer and everything behind it: findings with clickable query citations, time window, definitions with their status, assumptions, caveats, traceability warnings, and what the run cost. |
 | `src/app/chat/query-list.*` | The SQL that ran, numbered as the findings cite it, with failed attempts kept apart. |
@@ -55,7 +56,7 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/chat/step-log.ts` | Every step the agent took, with the SQL of each query, live and afterwards. |
 | `src/app/chat/composer.ts` | The question box. Enter sends, Shift+Enter adds a line. |
 | `src/app/chat/token-prompt.ts` | Asks for the access token when the service requires one. |
-| `src/app/app.*` | The page: sidebar, service status, example questions, the thread and the question box. Keeps the open conversation's id in the address, so a reload returns to it. |
+| `src/app/app.*` | The page: sidebar with its draggable edge, service status, example questions, the thread and the question box. Keeps the open conversation's id in the address, so a reload returns to it. |
 
 ## What an answer shows
 

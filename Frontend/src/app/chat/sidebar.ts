@@ -33,6 +33,8 @@ export class Sidebar {
   readonly open = output<string>();
   readonly rename = output<{ id: string; title: string }>();
   readonly remove = output<string>();
+  /** Hide the sidebar. On a phone this closes the drawer. */
+  readonly collapse = output<void>();
 
   protected readonly max = MAX_TITLE_CHARS;
   protected readonly renaming = signal<string | null>(null);

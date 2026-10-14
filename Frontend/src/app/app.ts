@@ -17,6 +17,16 @@ import { Composer } from './chat/composer';
 import { ExchangeView } from './chat/exchange-view';
 import { Sidebar } from './chat/sidebar';
 import { TokenPrompt } from './chat/token-prompt';
+import {
+  NARROW_QUERY,
+  SIDEBAR_DEFAULT,
+  SIDEBAR_MIN,
+  SIDEBAR_STEP,
+  clampWidth,
+  loadLayout,
+  maxWidth,
+  saveLayout,
+} from './sidebar-layout';
 
 export const EXAMPLE_QUESTIONS = [
   'How many patients have diabetes?',
@@ -29,6 +39,11 @@ export const EXAMPLE_QUESTIONS = [
   imports: [Composer, ExchangeView, Sidebar, TokenPrompt],
   templateUrl: './app.html',
   styleUrl: './app.css',
+  host: {
+    '[style.--side-width]': "sideWidth() + 'px'",
+    '[class.collapsed]': 'collapsed()',
+    '[class.resizing]': 'resizing()',
+  },
 })
 export class App implements OnInit {
   protected readonly store = inject(ChatStore);
@@ -42,12 +57,25 @@ export class App implements OnInit {
   private readonly window = inject(DOCUMENT).defaultView;
   private readonly restored = signal(false);
 
+  private readonly storage = storageOf(this.window);
+  private readonly layout = loadLayout(this.storage);
+  /** The sidebar's width in pixels, set by dragging its edge and kept between visits. */
+  protected readonly sideWidth = signal(this.layout.width);
+  /** Whether the sidebar is hidden on a wide screen. A phone uses the drawer instead. */
+  protected readonly collapsed = signal(this.layout.collapsed);
+  /** True while the edge is being dragged, so the width follows the pointer without easing. */
+  protected readonly resizing = signal(false);
+  protected readonly sideMin = SIDEBAR_MIN;
+
   constructor() {
     // Keep the newest step or answer in view as the conversation grows.
     afterRenderEffect(() => {
       this.store.exchanges();
       this.end()?.nativeElement.scrollIntoView?.({ block: 'end' });
     });
+    effect(() =>
+      saveLayout(this.storage, { width: this.sideWidth(), collapsed: this.collapsed() }),
+    );
     // Keep the conversation in the address, so reloading the page returns to it.
     effect(() => {
       const id = this.store.conversationId();
@@ -90,6 +118,75 @@ export class App implements OnInit {
     }
   }
 
+  /** Show the conversations: open the drawer on a phone, or expand the sidebar. */
+  protected showSidebar(): void {
+    if (this.narrow()) {
+      this.menuOpen.set(true);
+    } else {
+      this.collapsed.set(false);
+    }
+  }
+
+  /** Hide the conversations. Nothing about the conversation on screen changes. */
+  protected hideSidebar(): void {
+    if (this.narrow()) {
+      this.menuOpen.set(false);
+    } else {
+      this.collapsed.set(true);
+    }
+  }
+
+  protected sideMax(): number {
+    return maxWidth(this.window?.innerWidth ?? Infinity);
+  }
+
+  protected startResize(event: PointerEvent): void {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    (event.target as Element).setPointerCapture?.(event.pointerId);
+    this.resizing.set(true);
+  }
+
+  protected resize(event: PointerEvent): void {
+    if (this.resizing()) {
+      // The sidebar starts at the left edge of the window, so the pointer gives its width.
+      this.setWidth(event.clientX);
+    }
+  }
+
+  protected endResize(): void {
+    this.resizing.set(false);
+  }
+
+  /** Arrow keys move the edge, Home and End go to the narrowest and widest. */
+  protected resizeWithKey(event: KeyboardEvent): void {
+    const width = this.sideWidth();
+    const next: Record<string, number> = {
+      ArrowLeft: width - SIDEBAR_STEP,
+      ArrowRight: width + SIDEBAR_STEP,
+      Home: SIDEBAR_MIN,
+      End: this.sideMax(),
+    };
+    if (event.key in next) {
+      event.preventDefault();
+      this.setWidth(next[event.key]);
+    }
+  }
+
+  protected resetWidth(): void {
+    this.setWidth(SIDEBAR_DEFAULT);
+  }
+
+  private setWidth(width: number): void {
+    this.sideWidth.set(clampWidth(width, this.window?.innerWidth ?? Infinity));
+  }
+
+  private narrow(): boolean {
+    return this.window?.matchMedia?.(NARROW_QUERY).matches ?? false;
+  }
+
   protected ask(question: string): void {
     void this.store.ask(question);
   }
@@ -116,4 +213,12 @@ export class App implements OnInit {
 function addressId(window: Window): string | null {
   const id = window.location.hash.slice(1);
   return /^[0-9a-f]{32}$/.test(id) ? id : null;
+}
+
+function storageOf(window: Window | null): Storage | undefined {
+  try {
+    return window?.localStorage;
+  } catch {
+    return undefined; // Reading it can throw when site data is blocked.
+  }
 }

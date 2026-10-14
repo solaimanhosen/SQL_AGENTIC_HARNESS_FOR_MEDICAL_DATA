@@ -20,6 +20,9 @@ behind it are in `docs/chat-history-and-streaming.md`.
 - Streamed answers. The headline and findings appear as a draft while the model writes
   them, through a new `answer_delta` event on `/api/ask/stream`. The checked answer, with
   its citations, definitions and dates, replaces the draft.
+- The sidebar can be resized by dragging its edge, between 200 and 480 pixels and never
+  more than half the window, or collapsed to give the chat the whole width. The browser
+  remembers both.
 - If the browser loses the stream, the interface fetches the finished answer from the
   service instead of showing a failure.
 - Settings `SQL_AGENT_CONVERSATIONS_PATH` and `SQL_AGENT_STORE_RESULT_ROWS`.

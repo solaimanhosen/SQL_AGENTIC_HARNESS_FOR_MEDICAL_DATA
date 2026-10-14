@@ -23,6 +23,7 @@ Demo 2 slides on this work.
 | After a page reload | The screen is empty | The same conversation reopens |
 | Finding an earlier conversation | Not possible | Sidebar list, newest first |
 | Managing conversations | Start a new one | New chat, rename, delete |
+| The conversation list | None | A sidebar that can be resized by dragging its edge, or collapsed |
 | What streams while the agent works | Each step (SQL, results, lookups) | Each step, then the answer text as a draft |
 | When the answer text is first seen | When the whole answer is finished | As soon as the model starts writing it |
 | Per-conversation token budget | Reset by a restart | Stored with the conversation |
@@ -110,6 +111,23 @@ event replaces the draft.
 
 A turn is written once, after its answer has passed the checks. Partial text is never stored.
 
+### The sidebar's size
+
+Added on 14 October 2026, after the first review.
+
+- **Resize:** drag the sidebar's right edge. It stays between 200 px and 480 px, and never
+  takes more than half the window, so on a 900 px window it stops at 450 px. The edge also
+  responds to the keyboard (arrow keys, Home, End), and a double-click resets it to 272 px.
+- **Collapse:** a button at the top of the sidebar hides it, and a button in the header
+  brings it back. The chat column widens to fill the space with a short animation. Nothing
+  about the conversation on screen changes, and the page does not reload.
+- **Remembered:** the width and the collapsed state are kept in the browser's local
+  storage, so they survive a reload. This is a convenience only: if storage is blocked the
+  sidebar opens at its default size. Nothing sensitive is stored, and the access token is
+  still never written to browser storage.
+- **Phones:** below 768 px the sidebar is a drawer over the page, as before. Resizing is
+  switched off there, and the hide button closes the drawer.
+
 ## Schema
 
 `conversations`
@@ -174,7 +192,7 @@ Every new endpoint requires the access token when one is configured.
 
 ## Status
 
-All seven steps are done on the branch `sql_agent/chat/dev`. It is not yet merged into
+All eight steps are done on the branch `sql_agent/chat/dev`. It is not yet merged into
 `main` or tagged v2.1.0.
 
 | Step | What | Status | Commit |
@@ -185,7 +203,8 @@ All seven steps are done on the branch `sql_agent/chat/dev`. It is not yet merge
 | 4 | Backend: list, open, rename and delete endpoints | Done | `e78b689` |
 | 5 | Interface: draft answer while the agent works | Done | `85e579d` |
 | 6 | Interface: conversation sidebar | Done | `a114e12` |
-| 7 | Security catalogue, evaluation re-run, documentation | Done | the commit after `a114e12` |
+| 7 | Security catalogue, evaluation re-run, documentation | Done | `5868eec` |
+| 8 | Interface: resizable and collapsible sidebar | Done | the commit after `5868eec` |
 
 ## Results
 
@@ -194,7 +213,7 @@ Measured on 13 October 2026 with Claude Opus 5.
 | Check | v2.0.0 | v2.1.0 |
 |---|---|---|
 | Backend tests, no network | 238 passed | 272 passed |
-| Interface tests, no network | 53 passed | 71 passed |
+| Interface tests, no network | 53 passed | 78 passed |
 | Security catalogue | 35 of 35 | 35 of 35 |
 | Evaluation | 20 of 20 | 20 of 20 |
 | Evaluation cost | 433,148 in, 24,012 out, 6.3 minutes | 417,750 in, 23,739 out, 5.4 minutes |
@@ -223,6 +242,9 @@ Checked by hand in the browser, against a real service:
 - New chat, rename and delete worked, and deleting the open conversation cleared the screen.
 - At phone width (390 px) the page did not scroll sideways, and the sidebar opened as a
   drawer.
+- Dragging the sidebar's edge resized it and stopped at 200 px and 480 px. Collapsing and
+  expanding animated over 0.2 seconds, and a reload kept both the width and the collapsed
+  state.
 
 ## Demo notes
 
@@ -239,7 +261,9 @@ A suggested order for showing this live, about three minutes:
 4. **Stop and start the service in the terminal, then reload the page.** The conversation
    is still there, tables included. Ask one more follow-up to show it continues.
 5. **Open an older conversation from the sidebar**, rename it, and delete another.
-6. **Optionally narrow the window to phone width** to show the drawer.
+6. **Drag the sidebar's edge wider and narrower, then collapse it** to give the chat the
+   whole screen, and bring it back.
+7. **Optionally narrow the window to phone width** to show the drawer.
 
 Lines worth having ready:
 
