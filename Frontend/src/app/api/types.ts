@@ -144,6 +144,48 @@ export interface AuthUser {
   default_effort: Effort | null;
 }
 
+/** What the account page may change. Fields left out stay as they are. */
+export interface AccountChanges {
+  name?: string;
+  /** null clears the default, so new chats start on the service's. */
+  default_model?: string | null;
+  default_effort?: Effort | null;
+}
+
+/** One signed-in browser or device. */
+export interface SessionInfo {
+  id: string;
+  created_at: string;
+  last_used_at: string;
+  expires_at: string;
+  user_agent: string;
+  /** The session this page is using. */
+  current: boolean;
+}
+
+export interface ModelUsage {
+  model: string;
+  label: string;
+  questions: number;
+  input_tokens: number;
+  output_tokens: number;
+  /** At list prices; null for a model no longer offered. */
+  estimated_cost_usd: number | null;
+}
+
+/** What the signed-in person has spent: today against their budget, this month by model. */
+export interface MyUsage {
+  day: string;
+  today_tokens: number;
+  daily_budget: number | null;
+  month_start: string;
+  questions: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost_usd: number;
+  by_model: ModelUsage[];
+}
+
 /** What the sign-in pages should offer. */
 export interface AuthConfig {
   registration_open: boolean;

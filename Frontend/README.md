@@ -63,7 +63,8 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/chat/model-picker.ts` | Two menus in the question box: the model, with its price and evaluation status, and the effort. The choice applies to the next question; a reopened conversation continues on its latest answer's model. |
 | `src/app/auth/auth.ts` | Who is signed in, the guards for the chat and the sign-in pages, and the messages for Google sign-in codes. |
 | `src/app/auth/auth-page.ts` | Sign in and create an account: email and password, and "Continue with Google" when the service offers it. |
-| `src/app/ui/profile-menu.ts` | The avatar in the header: who is signed in, and Sign out. |
+| `src/app/ui/profile-menu.ts` | The avatar in the header: who is signed in, Account settings, and Sign out. |
+| `src/app/account/` | The account page, loaded only when opened, at `/account?tab=`: Profile (name), Security (password, Google, signed-in devices), Preferences (default model and effort, theme), Usage (today against the budget, this month by model). |
 | `src/app/app.ts`, `app.routes.ts`, `app.config.ts` | The root, which is only a router outlet, and the routes: `/` is a new chat and `/c/<id>` a stored one, matched by one route so the page is kept when a new chat gets its id. Old `/#<id>` links are moved to the new address. |
 | `src/app/chat/chat-page.*` | The chat screen: sidebar with its draggable edge, the header with service status and the theme menu, example questions, the thread and the question box. Keeps the address and the conversation on screen in step. |
 | `src/app/ui/theme.ts`, `theme-toggle.ts` | System, light or dark. The choice is kept in this browser; `index.html` applies it before the app starts. |

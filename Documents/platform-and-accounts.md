@@ -283,18 +283,29 @@ changes roles, disables, resets passwords, and opens or closes registration.
 - An avatar in the header with the person's name, email, role and Sign out.
 - The token prompt is gone.
 
-### Accounts page (Step 20)
+### Account page (Step 20)
 
-Planned:
-- An account page with these sections:
-  - profile;
-  - password;
-  - sessions, with sign out everywhere;
-  - connecting and disconnecting Google;
-  - default model and effort;
-  - theme;
-  - usage.
-- The full profile menu, with Account settings and Admin console (admins only).
+The page is `/account`, opened from **Account settings** in the avatar menu. It loads only
+when opened, so it adds nothing to the chat's first load (7 kB). Each section has its own
+address, `?tab=`.
+
+| Section | What it does |
+|---|---|
+| Profile | Change your name. Your email and role are shown; only an admin changes them |
+| Security | Change your password with the current one, or set a first one on a Google-only account. Connect or disconnect Google (refused while Google is the only way in). See every signed-in browser and device by name, such as "Chrome on macOS · This device", and sign one or all of the others out |
+| Preferences | The default model and effort new chats start on, kept with the account so it follows you; and the theme, kept in this browser |
+| Usage | Today's tokens against your daily budget, and this month's questions, tokens and estimated cost by model |
+
+**Smaller changes.**
+- A new chat starts on your default model. Before, it kept the last one picked.
+- Connecting Google from the account page comes back to the Security section, with any
+  error shown as text.
+- A person's daily budget is rebuilt from the stored answers. Found in the browser check:
+  after a restart, Usage showed 0 tokens for a day that had spent 88,713, and the budget had
+  reset too. Both now read the stored figure until the ledger has its own.
+- Costs under a cent show four decimal places, so Haiku's $0.0018 does not read as $0.00.
+
+The **Admin console** item joins the avatar menu in Step 22, with its page.
 
 ### Admin console (Steps 21 and 22)
 
@@ -343,7 +354,7 @@ Work is on the branch `sql_agent/platform/dev`, cut from `main` at `004d106`.
 | 17 | Sidebar: rail, search, Pinned, Recents and All chats | Done | `93d0716`, `c0d3535` |
 | 18 | Model and effort selection | Done | `9d104b8`, `7741cb6` |
 | 19 | Accounts: password and Google sign-in, ownership, roles, sign-in pages | Done | this step's commits |
-| 20 | Account page and the full profile menu | Planned | |
+| 20 | Account page and Account settings in the avatar menu | Done | this step's commits |
 | 21 | Admin console: backend jobs and monitoring | Planned | |
 | 22 | Admin console: interface | Planned | |
 | 23 | Polish, browser checks, records, merge and v4.0.0 | Planned | |
@@ -494,6 +505,39 @@ version 4, and the 11 older conversations were claimed by a scratch admin:
 - No sideways scroll at 390 px, in both themes.
 
 A live Google sign-in waits for real credentials.
+
+### Step 20
+
+| Check | After Step 19 | After Step 20 |
+|---|---|---|
+| Backend tests, no network | 490 passed, 3 skipped | 493 passed, 3 skipped |
+| Interface tests, no network | 152 passed | 166 passed |
+| Production bundle, first load | 120 kB transferred | 124 kB, with the account page loaded separately |
+
+**New tests:**
+- the usage route: totals, per-model costs, and nothing seen by another person;
+- a restart that must not reset a person's budget;
+- the return to Security after a failed Google connection;
+- every section of the account page:
+  - saving a name;
+  - a password change refused without the current password or with mismatched new ones;
+  - a Google-only account setting its first password;
+  - the Google link, and its absence;
+  - error codes;
+  - devices and signing one out;
+  - saving a default model and effort;
+  - the theme;
+  - usage figures;
+- the device names;
+- cost formatting;
+- a new chat starting on the default.
+
+**Checked in headless Chrome** against the scratch service:
+- the avatar menu, and every section;
+- saving Haiku 5.5 at low effort as the default, after which a new chat started on it;
+- Usage after a restart, showing today's 88,713 tokens;
+- sign-in returning to `/account?tab=usage`;
+- no sideways scroll at 390 px.
 
 ## Open items
 

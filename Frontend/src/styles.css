@@ -496,6 +496,68 @@ button.chip:hover:not(:disabled) {
   color: var(--danger);
 }
 
+/* Settings pages (account, and later the admin console): a titled card with form rows. */
+.settings-card {
+  padding: var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.settings-card + .settings-card {
+  margin-top: var(--space-5);
+}
+
+.settings-card h2 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-lg);
+}
+
+.settings-lead {
+  margin: 0 0 var(--space-5);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.settings-row {
+  display: grid;
+  gap: var(--space-1-5);
+  max-width: 26rem;
+  margin-bottom: var(--space-4);
+}
+
+.settings-row > label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.settings-hint {
+  margin: 0;
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.settings-status {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.settings-status.ok {
+  color: var(--ok-text);
+}
+
+.settings-status.error {
+  color: var(--danger);
+}
+
 /* Behind a dialog. The CDK overlay draws it; the colour is ours. */
 .dialog-backdrop {
   background: var(--overlay);

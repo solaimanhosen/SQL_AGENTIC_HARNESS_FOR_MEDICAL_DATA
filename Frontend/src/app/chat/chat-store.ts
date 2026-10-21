@@ -57,13 +57,16 @@ export class ChatStore {
   /** The model and effort the next question runs on. It may change between questions. */
   readonly choice = signal<ModelChoice | null>(null);
 
-  /** Fetch the models on offer, and start with the default if nothing is chosen yet. */
-  async loadModels(): Promise<void> {
+  /**
+   * Fetch the models on offer, and start with the default if nothing is chosen yet, or with
+   * `reset`, after the person changed their default.
+   */
+  async loadModels({ reset = false }: { reset?: boolean } = {}): Promise<void> {
     try {
       const catalog = await this.api.models();
       this.catalog.set(catalog);
-      if (!this.choice()) {
-        this.choice.set({ model: catalog.default_model, effort: catalog.default_effort });
+      if (reset || !this.choice()) {
+        this.useDefault();
       }
     } catch {
       // Without the list the picker stays hidden and the service's default applies. An
@@ -98,13 +101,22 @@ export class ChatStore {
     await this.run(id, exchange.question);
   }
 
-  /** Forget the conversation, so the next question starts fresh. */
+  /** Forget the conversation, so the next question starts fresh, on the person's default model. */
   newConversation(): void {
     if (this.busy()) {
       return;
     }
     this.exchanges.set([]);
     this.conversationId.set(null);
+    this.useDefault();
+  }
+
+  /** The service's default for this person: their own default model, or the service's. */
+  private useDefault(): void {
+    const catalog = this.catalog();
+    if (catalog) {
+      this.choice.set({ model: catalog.default_model, effort: catalog.default_effort });
+    }
   }
 
   /** Fetch the list of stored conversations. A failure leaves the list as it was. */

@@ -1,6 +1,7 @@
 import { CdkMenu, CdkMenuItem, CdkMenuTrigger } from '@angular/cdk/menu';
 import { Component, computed, inject } from '@angular/core';
-import { LucideLogOut, LucideShieldCheck } from '@lucide/angular';
+import { Router } from '@angular/router';
+import { LucideLogOut, LucideSettings, LucideShieldCheck } from '@lucide/angular';
 
 import { Auth } from '../auth/auth';
 
@@ -16,7 +17,7 @@ export function initials(name: string, email: string): string {
 /** The signed-in person's avatar, opening a menu with who they are and Sign out. */
 @Component({
   selector: 'app-profile-menu',
-  imports: [CdkMenu, CdkMenuItem, CdkMenuTrigger, LucideLogOut, LucideShieldCheck],
+  imports: [CdkMenu, CdkMenuItem, CdkMenuTrigger, LucideLogOut, LucideSettings, LucideShieldCheck],
   template: `
     @if (auth.user(); as user) {
       <button
@@ -43,6 +44,15 @@ export function initials(name: string, email: string): string {
             }
           </div>
           <div class="menu-separator" role="separator"></div>
+          <button
+            type="button"
+            class="menu-item"
+            cdkMenuItem
+            (cdkMenuItemTriggered)="openAccount()"
+          >
+            <svg lucideSettings [size]="16"></svg>
+            <span>Account settings</span>
+          </button>
           <button
             type="button"
             class="menu-item"
@@ -102,6 +112,12 @@ export function initials(name: string, email: string): string {
 })
 export class ProfileMenu {
   protected readonly auth = inject(Auth);
+  private readonly router = inject(Router);
+
+  protected openAccount(): void {
+    void this.router.navigate(['/account']);
+  }
+
   protected readonly letters = computed(() => {
     const user = this.auth.user();
     return user ? initials(user.name, user.email) : '';

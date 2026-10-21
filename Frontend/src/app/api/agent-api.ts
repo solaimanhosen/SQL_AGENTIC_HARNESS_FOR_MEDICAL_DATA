@@ -2,6 +2,7 @@ import { Injectable, InjectionToken, inject, signal } from '@angular/core';
 
 import { SseParser } from './sse';
 import {
+  AccountChanges,
   Answer,
   AuthConfig,
   AuthUser,
@@ -12,6 +13,8 @@ import {
   Health,
   ModelCatalog,
   ModelChoice,
+  MyUsage,
+  SessionInfo,
   StreamEvent,
 } from './types';
 
@@ -70,6 +73,52 @@ export class AgentApi {
 
   async logout(): Promise<void> {
     await this.request('/auth/logout', { method: 'POST' }, { quiet: true });
+  }
+
+  async updateAccount(changes: AccountChanges): Promise<AuthUser> {
+    return this.json('/account', 'PATCH', changes);
+  }
+
+  /** `current` is needed when the account already has a password. */
+  async changePassword(current: string | null, next: string): Promise<void> {
+    await this.request('/account/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current, new: next }),
+    });
+  }
+
+  async sessions(): Promise<SessionInfo[]> {
+    const response = await this.request('/account/sessions', { method: 'GET' });
+    return (await response.json()) as SessionInfo[];
+  }
+
+  async revokeSession(id: string): Promise<void> {
+    await this.request(`/account/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  /** Sign out every other browser and device. Returns how many were signed out. */
+  async revokeOtherSessions(): Promise<number> {
+    const body = await this.json<{ revoked: number }>('/account/sessions/revoke-others', 'POST');
+    return body.revoked;
+  }
+
+  async disconnectGoogle(): Promise<AuthUser> {
+    return this.json('/account/google/disconnect', 'POST');
+  }
+
+  async myUsage(): Promise<MyUsage> {
+    const response = await this.request('/account/usage', { method: 'GET' });
+    return (await response.json()) as MyUsage;
+  }
+
+  private async json<T>(path: string, method: string, body?: object): Promise<T> {
+    const response = await this.request(path, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return (await response.json()) as T;
   }
 
   private async postAuth(path: string, body: object): Promise<AuthUser> {

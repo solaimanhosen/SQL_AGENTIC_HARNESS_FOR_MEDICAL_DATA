@@ -225,6 +225,15 @@ describe('ChatStore', () => {
     expect(store.choice()).toEqual({ model: 'claude-haiku-5-5', effort: 'low' });
   });
 
+  it('starts a new chat on the default model, after a question on another', async () => {
+    const { store } = setup(answered);
+    await store.loadModels();
+    store.choose({ model: 'claude-haiku-5-5', effort: 'low' });
+    await store.ask('How many?');
+    store.newConversation();
+    expect(store.choice()).toEqual({ model: 'claude-opus-5', effort: 'high' });
+  });
+
   it('sends the choice with the question', async () => {
     const { store, api } = setup(answered);
     const asked = vi.spyOn(api, 'askStream');

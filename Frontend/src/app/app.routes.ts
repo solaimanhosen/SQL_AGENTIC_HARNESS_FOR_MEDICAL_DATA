@@ -35,6 +35,13 @@ export const routes: Routes = [
     title: 'Create an account · Patient data questions',
   },
   {
+    path: 'account',
+    // Loaded only when opened, so the chat's first load stays small.
+    loadComponent: () => import('./account/account-page').then((module) => module.AccountPage),
+    canActivate: [signedInGuard],
+    title: 'Account · Patient data questions',
+  },
+  {
     matcher: chatMatcher,
     component: ChatPage,
     canActivate: [signedInGuard],

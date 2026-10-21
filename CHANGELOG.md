@@ -62,6 +62,18 @@ Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-account
   avatar menu with Sign out.
 - Account routes: `/api/auth/*` and `/api/account/*` (profile, default model, password,
   sessions).
+- An account page at `/account`, opened from the avatar menu:
+  - **Profile:** your name.
+  - **Security:**
+    - change your password, or set a first one on a Google-only account;
+    - connect or disconnect Google;
+    - see every signed-in browser and device, and sign them out one by one or all at once.
+  - **Preferences:** the default model and effort new chats start on, and the theme.
+  - **Usage:** today's tokens against your daily budget, and this month's questions, tokens
+    and estimated cost by model.
+- `GET /api/account/usage`.
+- A new chat starts on your default model. A person's daily budget is rebuilt from the
+  stored answers, so a restart no longer resets it.
 - Schema version 4: users, sessions, pending Google sign-ins and settings in the application
   database, now opened by `appdb.py`.
 - Schema versions for `data/conversations.db`. A v3 file upgrades in place when opened, and a
