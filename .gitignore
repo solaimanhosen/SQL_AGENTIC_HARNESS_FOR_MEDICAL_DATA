@@ -4,20 +4,33 @@
 !.env.example
 api_key.txt
 *.key
+*.pem
+*.p12
+*.pfx
+
+# --- Local notes, planning and presentation material, not shared ---
+CLAUDE.md
+/*-local/
 
 # --- Python ---
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-.venv-docs/
+.venv-*/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+.ipynb_checkpoints/
 
-# --- Generated data (rebuild with the loader script) ---
-Backend/synthea.db
-Backend/data/conversations.db
+# --- Databases: built by the loader or written by the service ---
+*.db
+*.sqlite
+*.sqlite3
 *.db-journal
 *.db-wal
 *.db-shm
@@ -25,15 +38,14 @@ Backend/data/conversations.db
 # --- Agent run logs and evaluation output ---
 Backend/logs/
 Backend/evals/results/
+*.log
 
-# --- Local working notes and presentation material, not shared ---
-CLAUDE.md
-presentation-local/
+# --- Frontend (Angular rules are in Frontend/.gitignore) ---
+node_modules/
 
 # --- OS / editor ---
 .DS_Store
-.claude/settings.local.json
+Thumbs.db
+.idea/
 .vscode/
-
-# --- Frontend (later phase) ---
-node_modules/
+.claude/settings.local.json

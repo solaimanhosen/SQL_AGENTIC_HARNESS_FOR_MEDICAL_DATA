@@ -36,7 +36,7 @@ an earlier one can be reopened from the sidebar and continued.
 | [`Backend/`](Backend/README.md) | The agent, its safety layers, the semantic layer, the HTTP service, the evaluation and the tests. Python 3.10+. |
 | [`Frontend/`](Frontend/README.md) | The chat interface. Angular 22 and TypeScript. |
 | [`docs/`](docs/) | The semantic layer, the evaluation, the security review and the decision records. |
-| `Documents/` | The project brief and sample questions from Telligen. |
+| `Documents/` | Sample questions from Telligen, mapped to the Synthea tables. |
 | [`CHANGELOG.md`](CHANGELOG.md) | What changed in each release. |
 
 ## Quick start
