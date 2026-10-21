@@ -495,6 +495,18 @@ version 4, and the 11 older conversations were claimed by a scratch admin:
 
 A live Google sign-in waits for real credentials.
 
+## Open items
+
+- **Google sign-in has not been tried with a real Google account.**
+  - The whole flow is tested against a fake Google, and the redirect to Google was checked
+    in a browser.
+  - A live sign-in waits for an OAuth client in Google Cloud Console.
+- **Password reset by email is not built.**
+  - A forgotten password is reset by an admin, from the command line now and from the
+    admin console after Step 22.
+  - Reset links need an email provider, which is still to be chosen. That would also bring
+    email verification.
+
 ## Demo notes
 
 To be written at Step 23. Things worth showing so far:
