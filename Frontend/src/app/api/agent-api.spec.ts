@@ -134,7 +134,7 @@ describe('AgentApi', () => {
     await expect(collect(api.askStream('q', null))).rejects.toMatchObject({ kind: 'stream_ended' });
   });
 
-  it('lists, opens, renames and deletes conversations, with the token', async () => {
+  it('lists, searches, opens, renames, pins and deletes conversations, with the token', async () => {
     const id = 'c'.repeat(32);
     const { api, fetchSpy } = setup(async (url, init) =>
       init.method === 'DELETE'
@@ -145,8 +145,10 @@ describe('AgentApi', () => {
 
     expect(await api.conversations()).toEqual([{ id }]);
     expect(await api.conversation(id)).toEqual({ id, title: 'Renamed' });
-    expect((await api.renameConversation(id, 'Renamed')).title).toBe('Renamed');
+    expect((await api.updateConversation(id, { title: 'Renamed' })).title).toBe('Renamed');
     await api.deleteConversation(id);
+    await api.updateConversation(id, { pinned: true });
+    await api.conversations('  heart & lung? ');
 
     const calls = fetchSpy.mock.calls.map(([url, init]) => [init.method, url]);
     expect(calls).toEqual([
@@ -154,8 +156,11 @@ describe('AgentApi', () => {
       ['GET', `/api/conversations/${id}`],
       ['PATCH', `/api/conversations/${id}`],
       ['DELETE', `/api/conversations/${id}`],
+      ['PATCH', `/api/conversations/${id}`],
+      ['GET', '/api/conversations?q=heart%20%26%20lung%3F'],
     ]);
     expect(fetchSpy.mock.calls[2][1].body).toBe(JSON.stringify({ title: 'Renamed' }));
+    expect(fetchSpy.mock.calls[4][1].body).toBe(JSON.stringify({ pinned: true }));
     for (const [, init] of fetchSpy.mock.calls) {
       expect(new Headers(init.headers).get('Authorization')).toBe('Bearer the-shared-token');
     }

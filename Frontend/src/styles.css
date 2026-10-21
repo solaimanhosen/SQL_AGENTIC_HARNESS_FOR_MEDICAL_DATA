@@ -492,8 +492,13 @@ button.chip:hover:not(:disabled) {
   color: var(--accent);
 }
 
-.menu-item.danger {
+.menu-item.destructive {
   color: var(--danger);
+}
+
+/* Behind a dialog. The CDK overlay draws it; the colour is ours. */
+.dialog-backdrop {
+  background: var(--overlay);
 }
 
 .menu-separator {

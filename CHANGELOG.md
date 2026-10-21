@@ -16,6 +16,18 @@ Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-account
 - The Inter typeface, self-hosted, and Lucide icons. Angular CDK for menus.
 - Conversation addresses `/c/<id>`, with back and forward between conversations. Old
   `/#<id>` links still open.
+- A new sidebar.
+  - It collapses to a rail of icons, and its toggle stays at the same top-left spot
+    whether it is open, collapsed or a phone drawer.
+  - It has Pinned, Recents (the five most recently used) and All chats (the rest, grouped by
+    month), each collapsible and remembered.
+  - A "⋯" menu on every row pins, renames or deletes. Deleting asks in a dialog.
+- Searching conversations. The box sits in the sidebar, and Ctrl or ⌘K opens it from
+  anywhere. It looks in titles and in every question, through `GET /api/conversations?q=`.
+- Pinning: `PATCH /api/conversations/{id}` takes `{"pinned": true}` as well as a title.
+  Pinned conversations are evicted last.
+- Schema versions for `data/conversations.db`. A v3 file upgrades in place when opened, and a
+  file from a newer version is refused untouched.
 
 ### Changed
 
@@ -24,6 +36,8 @@ Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-account
 - The question box is a single card with a send button, and the example questions are
   cards.
 - The header shows the open conversation's title and a status dot.
+- The phone drawer moves focus inside when it opens, keeps it there, and closes with Escape,
+  returning focus to the button that opened it.
 - When the service cannot be reached, the message no longer tells users to run a command.
 
 ## v3.0.0 — 21 October 2026

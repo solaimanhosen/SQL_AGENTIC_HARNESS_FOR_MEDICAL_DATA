@@ -1,7 +1,7 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 
 import { AgentApi, ApiError } from '../api/agent-api';
-import { Answer, ConversationSummary, Draft, Step } from '../api/types';
+import { Answer, ConversationChanges, ConversationSummary, Draft, Step } from '../api/types';
 
 export const MAX_QUESTION_CHARS = 2000;
 
@@ -35,6 +35,10 @@ export class ChatStore {
   readonly conversationId = signal<string | null>(null);
   /** Stored conversations, most recently used first. */
   readonly conversations = signal<ConversationSummary[]>([]);
+  /** Conversations matching the search text, or null when nothing is being searched. */
+  readonly searchResults = signal<ConversationSummary[] | null>(null);
+  /** Counts searches, so an answer to an older one never replaces a newer one's. */
+  private searchCount = 0;
   /** Replaceable in tests, so recovering a lost stream does not wait on a real clock. */
   wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
   readonly busy = computed(() =>
@@ -112,11 +116,52 @@ export class ChatStore {
   }
 
   async rename(id: string, title: string): Promise<void> {
+    await this.update(id, { title });
+  }
+
+  /** Pin a conversation to the top of the list, or unpin it. */
+  async pin(id: string, pinned: boolean): Promise<void> {
+    await this.update(id, { pinned });
+  }
+
+  private async update(id: string, changes: ConversationChanges): Promise<void> {
     try {
-      const renamed = await this.api.renameConversation(id, title);
-      this.conversations.update((list) => list.map((item) => (item.id === id ? renamed : item)));
+      this.replace(await this.api.updateConversation(id, changes));
     } catch {
       await this.refreshConversations();
+    }
+  }
+
+  /** Put a changed conversation into the list, and into the search results if it is there. */
+  private replace(summary: ConversationSummary): void {
+    const swap = (list: ConversationSummary[]) =>
+      list.map((item) => (item.id === summary.id ? summary : item));
+    this.conversations.update(swap);
+    this.searchResults.update((found) => found && swap(found));
+  }
+
+  /**
+   * Search titles and questions on the service. Empty text ends the search. A failed search
+   * shows no results rather than an error, since the full list is still there.
+   */
+  async search(text: string): Promise<void> {
+    const count = ++this.searchCount;
+    if (!text.trim()) {
+      this.searchResults.set(null);
+      return;
+    }
+    try {
+      const found = await this.api.conversations(text);
+      if (count === this.searchCount) {
+        this.searchResults.set(found);
+      }
+    } catch (error) {
+      if (count === this.searchCount) {
+        this.searchResults.set([]);
+      }
+      if (error instanceof ApiError && error.kind === 'unauthorized') {
+        this.needsToken.set(true);
+      }
     }
   }
 
@@ -134,6 +179,7 @@ export class ChatStore {
       }
     }
     this.conversations.update((list) => list.filter((item) => item.id !== id));
+    this.searchResults.update((found) => found && found.filter((item) => item.id !== id));
     if (id === this.conversationId()) {
       this.exchanges.set([]);
       this.conversationId.set(null);

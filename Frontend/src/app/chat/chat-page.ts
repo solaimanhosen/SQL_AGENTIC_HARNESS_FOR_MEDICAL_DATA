@@ -1,6 +1,7 @@
 import { DOCUMENT } from '@angular/common';
 import {
   Component,
+  DestroyRef,
   ElementRef,
   OnInit,
   afterRenderEffect,
@@ -12,6 +13,7 @@ import {
   untracked,
   viewChild,
 } from '@angular/core';
+import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { ActivatedRoute, Router } from '@angular/router';
 import { LucidePanelLeft } from '@lucide/angular';
 
@@ -32,7 +34,7 @@ import { storageOf } from '../ui/theme';
 import { ChatStore } from './chat-store';
 import { Composer } from './composer';
 import { ExchangeView } from './exchange-view';
-import { Sidebar } from './sidebar';
+import { Sidebar, SidebarMode } from './sidebar';
 import { TokenPrompt } from './token-prompt';
 
 export const EXAMPLE_QUESTIONS = [
@@ -51,13 +53,22 @@ export const CONVERSATION_ID = /^[0-9a-f]{32}$/;
  */
 @Component({
   selector: 'app-chat-page',
-  imports: [Composer, ExchangeView, LucidePanelLeft, Sidebar, ThemeToggle, TokenPrompt],
+  imports: [
+    CdkTrapFocus,
+    Composer,
+    ExchangeView,
+    LucidePanelLeft,
+    Sidebar,
+    ThemeToggle,
+    TokenPrompt,
+  ],
   templateUrl: './chat-page.html',
   styleUrl: './chat-page.css',
   host: {
     '[style.--side-width]': "sideWidth() + 'px'",
     '[class.collapsed]': 'collapsed()',
     '[class.resizing]': 'resizing()',
+    '(document:keydown)': 'onKeydown($event)',
   },
 })
 export class ChatPage implements OnInit {
@@ -74,7 +85,15 @@ export class ChatPage implements OnInit {
   /** Whether the conversation list is drawn over the page, at phone width. */
   protected readonly menuOpen = signal(false);
   private readonly end = viewChild<ElementRef<HTMLElement>>('end');
+  private readonly sidebar = viewChild.required<Sidebar>('sidebar');
+  private readonly menuToggle = viewChild<ElementRef<HTMLButtonElement>>('menuToggle');
   private readonly window = inject(DOCUMENT).defaultView;
+  /** True at phone width, where the sidebar is a drawer instead of a column. */
+  protected readonly narrow = signal(this.window?.matchMedia?.(NARROW_QUERY).matches ?? false);
+  protected readonly drawerOpen = computed(() => this.narrow() && this.menuOpen());
+  protected readonly sideMode = computed<SidebarMode>(() =>
+    this.narrow() ? 'drawer' : this.collapsed() ? 'rail' : 'full',
+  );
   /** False until the address has been read once, so it is not overwritten before then. */
   private readonly restored = signal(false);
 
@@ -95,6 +114,10 @@ export class ChatPage implements OnInit {
   });
 
   constructor() {
+    const media = this.window?.matchMedia?.(NARROW_QUERY);
+    const follow = (event: MediaQueryListEvent) => this.narrow.set(event.matches);
+    media?.addEventListener?.('change', follow);
+    inject(DestroyRef).onDestroy(() => media?.removeEventListener?.('change', follow));
     // Keep the newest step or answer in view as the conversation grows.
     afterRenderEffect(() => {
       this.store.exchanges();
@@ -181,21 +204,46 @@ export class ChatPage implements OnInit {
     }
   }
 
-  /** Show the conversations: open the drawer on a phone, or expand the sidebar. */
-  protected showSidebar(): void {
+  /**
+   * The sidebar's own toggle: close the drawer on a phone, or switch between the full sidebar
+   * and the rail. Nothing about the conversation on screen changes.
+   */
+  protected toggleSidebar(): void {
+    if (this.narrow()) {
+      this.closeDrawer();
+    } else {
+      this.collapsed.update((collapsed) => !collapsed);
+    }
+  }
+
+  /** Show the sidebar, whatever its state, with the cursor in the search box. */
+  protected openSearch(): void {
     if (this.narrow()) {
       this.menuOpen.set(true);
     } else {
       this.collapsed.set(false);
     }
+    this.sidebar().focusSearch();
   }
 
-  /** Hide the conversations. Nothing about the conversation on screen changes. */
-  protected hideSidebar(): void {
-    if (this.narrow()) {
-      this.menuOpen.set(false);
-    } else {
-      this.collapsed.set(true);
+  /** Open the drawer at phone width, and move the keyboard into it. */
+  protected openDrawer(): void {
+    this.menuOpen.set(true);
+    this.sidebar().focusToggle();
+  }
+
+  private closeDrawer(): void {
+    this.menuOpen.set(false);
+    this.menuToggle()?.nativeElement.focus();
+  }
+
+  /** Ctrl+K or Cmd+K searches the conversations; Escape closes the drawer. */
+  protected onKeydown(event: KeyboardEvent): void {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      this.openSearch();
+    } else if (event.key === 'Escape' && this.drawerOpen()) {
+      this.closeDrawer();
     }
   }
 
@@ -244,10 +292,6 @@ export class ChatPage implements OnInit {
 
   private setWidth(width: number): void {
     this.sideWidth.set(clampWidth(width, this.window?.innerWidth ?? Infinity));
-  }
-
-  private narrow(): boolean {
-    return this.window?.matchMedia?.(NARROW_QUERY).matches ?? false;
   }
 
   protected ask(question: string): void {

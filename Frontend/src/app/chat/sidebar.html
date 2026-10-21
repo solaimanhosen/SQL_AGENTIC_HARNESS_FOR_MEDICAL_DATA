@@ -1,77 +1,250 @@
 <div class="top">
-  <p class="brand">
-    <span class="mark" aria-hidden="true">PQ</span>
-    <span>Patient data questions</span>
-  </p>
+  <!-- Always the first control, at the same spot, whether the sidebar is open or a rail. -->
   <button
+    #toggleButton
     type="button"
-    class="ghost icon hide"
-    aria-label="Hide conversations"
-    title="Hide conversations"
-    (click)="collapse.emit()"
+    class="ghost icon toggle"
+    [attr.aria-label]="toggleLabel()"
+    [title]="toggleLabel()"
+    [attr.aria-expanded]="mode() !== 'rail'"
+    (click)="toggle.emit()"
   >
-    <svg lucidePanelLeftClose [size]="18"></svg>
+    @if (mode() === 'rail') {
+      <svg lucidePanelLeftOpen [size]="18"></svg>
+    } @else {
+      <svg lucidePanelLeftClose [size]="18"></svg>
+    }
   </button>
+  @if (mode() !== 'rail') {
+    <p class="brand">
+      <span class="mark" aria-hidden="true">PQ</span>
+      <span>Patient data questions</span>
+    </p>
+  }
 </div>
 
-<button type="button" class="secondary new" [disabled]="busy()" (click)="newChat.emit()">
-  <svg lucideSquarePen [size]="16"></svg>
-  <span>New chat</span>
-</button>
+@if (mode() === 'rail') {
+  <div class="rail-actions">
+    <button
+      type="button"
+      class="ghost icon"
+      aria-label="New chat"
+      title="New chat"
+      [disabled]="busy()"
+      (click)="newChat.emit()"
+    >
+      <svg lucideSquarePen [size]="18"></svg>
+    </button>
+    <button
+      type="button"
+      class="ghost icon"
+      aria-label="Search conversations"
+      title="Search conversations (Ctrl K)"
+      (click)="searchRequested.emit()"
+    >
+      <svg lucideSearch [size]="18"></svg>
+    </button>
+  </div>
+} @else {
+  <button type="button" class="secondary new" [disabled]="busy()" (click)="newChat.emit()">
+    <svg lucideSquarePen [size]="16"></svg>
+    <span>New chat</span>
+  </button>
 
-<nav aria-label="Conversations">
-  @if (!conversations().length) {
-    <p class="empty">Conversations you have appear here.</p>
-  }
-  <ul>
-    @for (conversation of conversations(); track conversation.id) {
-      <li [class.active]="conversation.id === activeId()">
-        @if (renaming() === conversation.id) {
-          <form class="rename" (submit)="saveRename($event, conversation)">
-            <label class="visually-hidden" [attr.for]="'title-' + conversation.id">New title</label>
-            <input
-              #titleInput
-              [id]="'title-' + conversation.id"
-              [value]="draftTitle()"
-              [attr.maxlength]="max"
-              (input)="draftTitle.set($any($event.target).value)"
-              (keydown.escape)="renaming.set(null)"
-            />
-            <button type="submit" class="small">Save</button>
-            <button type="button" class="small" (click)="renaming.set(null)">Cancel</button>
-          </form>
-        } @else if (deleting() === conversation.id) {
-          <div class="confirm" role="group" aria-label="Confirm deletion">
-            <span class="ask">Delete this conversation?</span>
-            <button type="button" class="small danger" (click)="confirmDelete(conversation.id)">
-              Delete
-            </button>
-            <button type="button" class="small" (click)="deleting.set(null)">Keep</button>
-          </div>
+  <div class="search" role="search">
+    <svg lucideSearch class="search-icon" [size]="16"></svg>
+    <label class="visually-hidden" for="conversation-search">Search conversations</label>
+    <input
+      #searchInput
+      id="conversation-search"
+      type="text"
+      class="field"
+      placeholder="Search chats"
+      autocomplete="off"
+      [value]="query()"
+      [attr.maxlength]="200"
+      (input)="onQuery($any($event.target).value)"
+      (keydown.escape)="escapeSearch($event)"
+    />
+    @if (query()) {
+      <button
+        type="button"
+        class="ghost icon sm clear"
+        aria-label="Clear the search"
+        title="Clear the search"
+        (click)="clearSearch()"
+      >
+        <svg lucideX [size]="14"></svg>
+      </button>
+    }
+  </div>
+
+  <nav aria-label="Conversations">
+    @if (searching()) {
+      <section class="section">
+        <h2 class="label">Results</h2>
+        @if (searchResults() === null) {
+          <p class="empty" role="status">Searching…</p>
+        } @else if (!searchResults()!.length) {
+          <p class="empty" role="status">No conversations match "{{ query().trim() }}".</p>
         } @else {
-          <button
-            type="button"
-            class="title"
-            [disabled]="busy()"
-            [attr.aria-current]="conversation.id === activeId() ? 'true' : null"
-            [title]="conversation.title"
-            (click)="open.emit(conversation.id)"
-          >
-            <span>{{ conversation.title }}</span>
-          </button>
-          <div class="tools">
-            <button type="button" class="small" (click)="startRename(conversation)">Rename</button>
+          <ul>
+            @for (conversation of searchResults(); track conversation.id) {
+              <ng-container *ngTemplateOutlet="row; context: { $implicit: conversation }" />
+            }
+          </ul>
+        }
+      </section>
+    } @else if (!conversations().length) {
+      <p class="empty">Your conversations will appear here.</p>
+    } @else {
+      @let groups = sections();
+      @if (groups.pinned.length) {
+        <ng-container
+          *ngTemplateOutlet="
+            section;
+            context: { name: 'pinned', label: 'Pinned', items: groups.pinned }
+          "
+        />
+      }
+      @if (groups.recents.length) {
+        <ng-container
+          *ngTemplateOutlet="
+            section;
+            context: { name: 'recents', label: 'Recents', items: groups.recents }
+          "
+        />
+      }
+      @if (groups.older.length) {
+        <section class="section">
+          <h2 class="label">
             <button
               type="button"
-              class="small"
-              [disabled]="busy() && conversation.id === activeId()"
-              (click)="askDelete(conversation.id)"
+              class="section-toggle"
+              aria-controls="section-all"
+              [attr.aria-expanded]="expanded().all"
+              (click)="toggleSection('all')"
             >
-              Delete
+              <svg lucideChevronRight class="chevron" [size]="14"></svg>
+              <span>All chats</span>
             </button>
+          </h2>
+          <div id="section-all" [hidden]="!expanded().all">
+            @for (group of groups.older; track group.label) {
+              <h3 class="month">{{ group.label }}</h3>
+              <ul>
+                @for (conversation of group.conversations; track conversation.id) {
+                  <ng-container *ngTemplateOutlet="row; context: { $implicit: conversation }" />
+                }
+              </ul>
+            }
           </div>
-        }
-      </li>
+        </section>
+      }
     }
-  </ul>
-</nav>
+  </nav>
+}
+
+<ng-template #section let-name="name" let-label="label" let-items="items">
+  <section class="section">
+    <h2 class="label">
+      <button
+        type="button"
+        class="section-toggle"
+        [attr.aria-controls]="'section-' + name"
+        [attr.aria-expanded]="isExpanded(name)"
+        (click)="toggleSection(name)"
+      >
+        <svg lucideChevronRight class="chevron" [size]="14"></svg>
+        <span>{{ label }}</span>
+      </button>
+    </h2>
+    <ul [id]="'section-' + name" [hidden]="!isExpanded(name)">
+      @for (conversation of items; track conversation.id) {
+        <ng-container *ngTemplateOutlet="row; context: { $implicit: conversation }" />
+      }
+    </ul>
+  </section>
+</ng-template>
+
+<ng-template #row let-conversation>
+  <li [class.active]="conversation.id === activeId()">
+    @if (renaming() === conversation.id) {
+      <form class="rename" (submit)="saveRename($event, conversation)">
+        <label class="visually-hidden" [attr.for]="'title-' + conversation.id">New title</label>
+        <input
+          #titleInput
+          [id]="'title-' + conversation.id"
+          [value]="draftTitle()"
+          [attr.maxlength]="max"
+          (input)="draftTitle.set($any($event.target).value)"
+          (keydown.escape)="cancelRename($event)"
+          (blur)="saveRename($event, conversation)"
+        />
+      </form>
+    } @else {
+      <button
+        type="button"
+        class="title"
+        [disabled]="busy()"
+        [attr.aria-current]="conversation.id === activeId() ? 'true' : null"
+        [title]="conversation.title"
+        (click)="open.emit(conversation.id)"
+      >
+        @if (conversation.pinned_at) {
+          <svg lucidePin class="pinned" [size]="12" aria-hidden="true"></svg>
+        }
+        <span>{{ conversation.title }}</span>
+      </button>
+      <button
+        type="button"
+        class="ghost icon sm more"
+        [attr.aria-label]="'Options for ' + conversation.title"
+        title="Options"
+        [cdkMenuTriggerFor]="rowMenu"
+        [cdkMenuTriggerData]="{ $implicit: conversation }"
+      >
+        <svg lucideEllipsis [size]="16"></svg>
+      </button>
+    }
+  </li>
+</ng-template>
+
+<ng-template #rowMenu let-conversation>
+  <div class="menu" cdkMenu>
+    <button
+      type="button"
+      class="menu-item"
+      cdkMenuItem
+      (cdkMenuItemTriggered)="togglePin(conversation)"
+    >
+      @if (conversation.pinned_at) {
+        <svg lucidePinOff [size]="16"></svg>
+        <span>Unpin</span>
+      } @else {
+        <svg lucidePin [size]="16"></svg>
+        <span>Pin</span>
+      }
+    </button>
+    <button
+      type="button"
+      class="menu-item"
+      cdkMenuItem
+      (cdkMenuItemTriggered)="startRename(conversation)"
+    >
+      <svg lucidePencil [size]="16"></svg>
+      <span>Rename</span>
+    </button>
+    <div class="menu-separator" role="separator"></div>
+    <button
+      type="button"
+      class="menu-item destructive"
+      cdkMenuItem
+      [cdkMenuItemDisabled]="busy() && conversation.id === activeId()"
+      (cdkMenuItemTriggered)="askDelete(conversation)"
+    >
+      <svg lucideTrash [size]="16"></svg>
+      <span>Delete</span>
+    </button>
+  </div>
+</ng-template>

@@ -73,6 +73,13 @@ The older models are left out. Opus 4.5 lacks `xhigh` and `max`, and Haiku 4.5 a
   header's sidebar button was also called `.menu`. At phone width the button stretched into
   a wide floating box. Browser checks at phone width caught it, and the button is now
   `.menu-toggle`.
+- **The same clash, a second time.** In the row menu, the Delete item was given `.danger`,
+  which is also the global red-button style. The item turned into a solid red bar with its
+  text invisible. It is `.destructive` now, and the rule against reusing global class names
+  is written down in CLAUDE.md and the frontend README.
+- **A drawer that is still sliding in cannot take focus.** The phone drawer's `visibility`
+  was transitioned, so on the first frame it was still hidden and the browser ignored
+  `focus()`. It now turns visible at once when opening and hides only after sliding out.
 - **The `lucide-angular` package stops at Angular 21.** Installing it here would mean
   forcing peer dependencies. The icons come from `@lucide/angular`, Lucide's newer
   standalone package, which supports Angular 17 and later.
@@ -113,17 +120,57 @@ Supporting pieces:
 
 ### Sidebar (Step 17)
 
-Planned:
-- A narrow rail that never moves, holding the sidebar button, New chat, Search and the
-  profile.
-- Search across titles and questions.
-- Three collapsible sections:
-  - **Pinned**: the chats the user pinned.
-  - **Recents**: the five most recently used chats that are not pinned.
-  - **All chats**: the rest, grouped by month.
-- The sections are worked out from the list each time it changes, so each chat appears once
-  and unpinning one moves it back on its own.
-- Row actions move into a "⋯" menu.
+**One toggle, one place.**
+- The sidebar has three modes:
+  - **full**, on a wide screen;
+  - **rail**, a 56px strip with the toggle, New chat and Search;
+  - **drawer**, over the page on a phone.
+- The toggle is the first control in every mode, measured at exactly 10px from the left and
+  top in all of them, including the phone header's button that opens the drawer.
+- Collapsing no longer hides the sidebar completely, so the way back is always where it was.
+
+**Sections** are worked out in the browser by one function, `partition`, each time the list
+changes:
+
+| Section | What it holds | Order |
+|---|---|---|
+| Pinned | Every pinned chat | Most recently pinned first |
+| Recents | The five most recently used chats that are not pinned | Most recent first |
+| All chats | Everything else | By month of last use, newest first |
+
+- Each chat appears exactly once.
+- Unpinning a chat, or using an old one, moves it to the right section with nothing else to
+  keep track of. Duplicates would have needed exactly that bookkeeping.
+- Each section collapses, and the choice is remembered in the browser.
+
+**Search.**
+- It runs on the service, so it finds words in any question of a conversation, not only in
+  its title.
+- `GET /api/conversations?q=` matches the text literally: `%` and `_` are not wildcards, and
+  the search is a parameterised query.
+- The box waits 250 ms after typing stops. Results from an older search never replace a
+  newer one's.
+- Escape clears it. Ctrl or ⌘K opens it from anywhere, expanding the rail or opening the
+  drawer first.
+
+**Row actions** sit behind a "⋯" button that fades in on hover or focus. Rows have a fixed
+height, so nothing moves.
+- The menu offers Pin or Unpin, Rename (inline, where Escape cancels) and Delete.
+- Delete asks in a dialog that traps focus, puts it on Cancel, and quotes the title as plain
+  text.
+
+**Pinning on the service.**
+- `PATCH /api/conversations/{id}` takes `{"pinned": true|false}`, a title, or both.
+- Pinning keeps its first time if repeated, and does not count as use.
+- When the store is full, unpinned conversations are removed before any pinned one.
+
+**Schema versions.**
+- `data/conversations.db` now records its version.
+- A file written by v3.0.0 is upgraded in place when the service opens it. Each step is its
+  own transaction, and nothing stored is lost.
+- A file from a newer version is refused untouched, and the service will not start on it.
+- Checked on a copy of the real conversations file, which came up at version 2 with every
+  conversation intact.
 
 ### Model and effort (Step 18)
 
@@ -189,8 +236,8 @@ Work is on the branch `sql_agent/platform/dev`, cut from `main` at `004d106`.
 
 | Step | What | Status | Commit |
 |---|---|---|---|
-| 16 | Design system, themes, router, icons, wider column | Done | this step's commit |
-| 17 | Sidebar: rail, search, Pinned, Recents and All chats | Planned | |
+| 16 | Design system, themes, router, icons, wider column | Done | `f01a0fa` |
+| 17 | Sidebar: rail, search, Pinned, Recents and All chats | Done | this step's commit |
 | 18 | Model and effort selection | Planned | |
 | 19 | Accounts: backend | Planned | |
 | 20 | Accounts: interface and profile menu | Planned | |
@@ -219,8 +266,47 @@ Checked in headless Chrome against a running service:
 - an opened conversation, with its chart, definitions and badges;
 - a phone at 390px, with no sideways scroll at any width.
 
+### Step 17
+
+| Check | After Step 16 | After Step 17 |
+|---|---|---|
+| Backend tests, no network | 375 passed, 3 skipped | 384 passed, 3 skipped |
+| Interface tests, no network | 118 passed | 130 passed |
+| Security catalogue | 78 of 78 | 78 of 78 |
+| Production bundle, transferred | 101 kB | 111 kB (CDK dialog and menus) |
+
+**New backend tests:**
+- a v3 file upgraded in place;
+- a newer file refused untouched;
+- pinning, and the order pinned and unpinned chats are evicted in;
+- search in titles and questions, with `%`, `_`, quotes and backslashes matched literally;
+- the PATCH and `?q=` routes, including their 422s.
+
+**New interface tests:**
+- the partition into sections;
+- pin and unpin through the menu;
+- renaming, and cancelling a rename with Escape;
+- deleting only after the dialog;
+- section collapse;
+- search, including stale answers;
+- Ctrl+K from the rail;
+- the rail's layout.
+
+**Checked in headless Chrome** against a copy of the real conversations file with seven
+older conversations added:
+- The toggle measured at (10, 10) open, as a rail, and on a phone both in the header and
+  in the drawer.
+- Ctrl+K from the rail expanded the sidebar with the cursor in the search box. "diabetes"
+  found the two matching chats.
+- The delete dialog opened with Cancel focused, and Escape closed it.
+- On a phone, the drawer took focus when it opened, and Escape closed it and returned focus
+  to the header button.
+- No sideways scroll at 390px. Light and dark themes both checked.
+
 ## Demo notes
 
 To be written at Step 23. Things worth showing so far:
 - Switching between light and dark from the header.
 - Copying a conversation's address into a new tab, where it opens.
+- Collapsing the sidebar to the rail and back: the toggle does not move.
+- Pinning a chat, then pressing Ctrl+K and searching for a word from a follow-up question.

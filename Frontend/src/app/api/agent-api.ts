@@ -3,6 +3,7 @@ import { Injectable, InjectionToken, inject, signal } from '@angular/core';
 import { SseParser } from './sse';
 import {
   Answer,
+  ConversationChanges,
   ConversationDetail,
   ConversationSummary,
   Draft,
@@ -49,9 +50,13 @@ export class AgentApi {
     return (await response.json()) as Health;
   }
 
-  /** Stored conversations, most recently used first. */
-  async conversations(): Promise<ConversationSummary[]> {
-    const response = await this.request('/conversations', { method: 'GET' });
+  /**
+   * Stored conversations, most recently used first. With search text, only those whose title
+   * or any question contains it.
+   */
+  async conversations(search?: string): Promise<ConversationSummary[]> {
+    const query = search?.trim() ? `?q=${encodeURIComponent(search.trim())}` : '';
+    const response = await this.request(`/conversations${query}`, { method: 'GET' });
     return (await response.json()) as ConversationSummary[];
   }
 
@@ -61,11 +66,12 @@ export class AgentApi {
     return (await response.json()) as ConversationDetail;
   }
 
-  async renameConversation(id: string, title: string): Promise<ConversationSummary> {
+  /** Rename, pin or unpin. Fields left out are not changed. */
+  async updateConversation(id: string, changes: ConversationChanges): Promise<ConversationSummary> {
     const response = await this.request(`/conversations/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify(changes),
     });
     return (await response.json()) as ConversationSummary;
   }

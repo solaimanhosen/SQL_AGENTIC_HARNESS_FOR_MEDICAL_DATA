@@ -1,14 +1,21 @@
 <app-sidebar
+  #sidebar
   class="side"
   [class.open]="menuOpen()"
+  [cdkTrapFocus]="drawerOpen()"
+  [mode]="sideMode()"
   [conversations]="store.conversations()"
+  [searchResults]="store.searchResults()"
   [activeId]="store.conversationId()"
   [busy]="store.busy()"
   (newChat)="newChat()"
   (open)="open($event)"
   (rename)="store.rename($event.id, $event.title)"
+  (pin)="store.pin($event.id, $event.pinned)"
   (remove)="store.remove($event)"
-  (collapse)="hideSidebar()"
+  (search)="store.search($event)"
+  (toggle)="toggleSidebar()"
+  (searchRequested)="openSearch()"
 />
 <div
   class="resizer"
@@ -40,12 +47,13 @@
 <div class="page">
   <header class="bar">
     <button
+      #menuToggle
       type="button"
       class="ghost icon menu-toggle"
       aria-label="Show conversations"
       title="Show conversations"
       [attr.aria-expanded]="menuOpen()"
-      (click)="showSidebar()"
+      (click)="openDrawer()"
     >
       <svg lucidePanelLeft [size]="18"></svg>
     </button>

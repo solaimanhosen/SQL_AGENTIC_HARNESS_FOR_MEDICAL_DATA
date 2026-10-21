@@ -1,4 +1,5 @@
 :host {
+  --rail-width: 3.5rem;
   /* Never more than half the window, whatever width was saved on a larger screen. */
   --side-track: min(var(--side-width, 17rem), 50vw);
   display: grid;
@@ -9,7 +10,7 @@
 }
 
 :host(.collapsed) {
-  grid-template-columns: 0 minmax(0, 1fr);
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
 }
 
 /* While dragging, the width follows the pointer at once, and text is not selected. */
@@ -26,13 +27,6 @@
   overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--surface-2);
-  transition: visibility var(--duration);
-}
-
-:host(.collapsed) .side {
-  visibility: hidden;
-  padding-inline: 0;
-  border-right: 0;
 }
 
 /* The right edge of the sidebar, wide enough to grab, drawn as a line on hover or focus. */
@@ -88,10 +82,6 @@
   display: none;
 }
 
-:host(.collapsed) .menu-toggle {
-  display: inline-flex;
-}
-
 @media (max-width: 48rem) {
   :host,
   :host(.collapsed) {
@@ -100,10 +90,6 @@
 
   .resizer {
     display: none;
-  }
-
-  :host(.collapsed) .side {
-    border-right: 1px solid var(--border);
   }
 
   .side {
@@ -119,10 +105,13 @@
       visibility var(--duration);
   }
 
-  .side.open,
-  :host(.collapsed) .side.open {
+  /* Visible at once when opening, so focus can move in; hidden only after sliding out. */
+  .side.open {
     visibility: visible;
     transform: none;
+    transition:
+      transform var(--duration) var(--ease),
+      visibility 0s;
   }
 
   .backdrop {
@@ -293,4 +282,11 @@ h1 {
   color: var(--text-subtle);
   font-size: var(--text-xs);
   text-align: center;
+}
+
+/* At phone width the header's toggle sits where the drawer's own toggle will appear. */
+@media (max-width: 48rem) {
+  .bar {
+    padding-left: var(--space-2-5);
+  }
 }

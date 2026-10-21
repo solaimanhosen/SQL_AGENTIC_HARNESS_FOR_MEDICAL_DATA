@@ -121,6 +121,14 @@ export interface ConversationSummary {
   updated_at: string;
   /** Questions answered in it so far. */
   turns: number;
+  /** When it was pinned, or null. Missing from services before pinning existed. */
+  pinned_at?: string | null;
+}
+
+/** What a PATCH may change. Fields left out stay as they are. */
+export interface ConversationChanges {
+  title?: string;
+  pinned?: boolean;
 }
 
 /** One answered question of a stored conversation, as it was sent when it was asked. */

@@ -1,4 +1,4 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 
@@ -24,9 +24,19 @@ function fakeApi(
     token: { set: vi.fn() },
     health: vi.fn(health),
     askStream: vi.fn(stream),
-    conversations: vi.fn(async (): Promise<ConversationSummary[]> => []),
+    conversations: vi.fn(async (_search?: string): Promise<ConversationSummary[]> => []),
     conversation: vi.fn(async (_id: string) => conversationFixture()),
-    renameConversation: vi.fn(async (id: string, title: string) => summaryFixture({ id, title })),
+    updateConversation: vi.fn(async (id: string, changes: { title?: string; pinned?: boolean }) =>
+      summaryFixture({
+        id,
+        title:
+          changes.title ??
+          (id === 'c'.repeat(32)
+            ? 'How many patients have diabetes?'
+            : '<b>Heart</b> disease by age'),
+        pinned_at: changes.pinned ? '2026-10-21T12:00:00Z' : null,
+      }),
+    ),
     deleteConversation: vi.fn(async (_id: string) => undefined),
   };
 }
@@ -279,12 +289,22 @@ describe('ChatPage', () => {
       expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
     });
 
-    it('renames a conversation from the list', async () => {
+    /** Open a row's "⋯" menu and pick the item with this text. */
+    async function choose(fixture: ComponentFixture<unknown>, row: Element, item: string) {
+      (row.querySelector('.more') as HTMLButtonElement).click();
+      await fixture.whenStable();
+      const items = [...document.querySelectorAll<HTMLButtonElement>('.menu .menu-item')];
+      const found = items.find((button) => button.textContent?.trim() === item);
+      expect(found, `menu item ${item}`).toBeDefined();
+      found!.click();
+      await fixture.whenStable();
+    }
+
+    it('renames a conversation from its menu', async () => {
       const { api, titles, fixture, element } = await withList();
       const row = element.querySelectorAll('.side li')[1];
 
-      (row.querySelector('.tools button') as HTMLButtonElement).click();
-      await fixture.whenStable();
+      await choose(fixture, row, 'Rename');
       const input = row.querySelector('input') as HTMLInputElement;
       expect(input.value).toBe(other.title);
       input.value = 'Heart disease';
@@ -292,24 +312,121 @@ describe('ChatPage', () => {
       (row.querySelector('form') as HTMLFormElement).dispatchEvent(new Event('submit'));
       await fixture.whenStable();
 
-      expect(api.renameConversation).toHaveBeenCalledWith(other.id, 'Heart disease');
+      expect(api.updateConversation).toHaveBeenCalledWith(other.id, { title: 'Heart disease' });
+      expect(api.updateConversation).toHaveBeenCalledTimes(1);
       expect(titles()[1].textContent?.trim()).toBe('Heart disease');
     });
 
-    it('deletes a conversation only after it is confirmed', async () => {
+    it('cancels a rename with Escape, keeping the old title', async () => {
+      const { api, fixture, element } = await withList();
+      const row = element.querySelectorAll('.side li')[1];
+      await choose(fixture, row, 'Rename');
+      const input = row.querySelector('input') as HTMLInputElement;
+      input.value = 'Something else';
+      input.dispatchEvent(new Event('input'));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      input.dispatchEvent(new Event('blur'));
+      await fixture.whenStable();
+      expect(api.updateConversation).not.toHaveBeenCalled();
+      expect(row.querySelector('input')).toBeNull();
+    });
+
+    it('deletes a conversation only after the dialog is confirmed', async () => {
       const { api, titles, fixture, element } = await withList();
       const row = element.querySelectorAll('.side li')[1];
 
-      (row.querySelectorAll('.tools button')[1] as HTMLButtonElement).click();
+      await choose(fixture, row, 'Delete');
+      const dialog = document.querySelector('app-confirm-dialog') as HTMLElement;
+      expect(dialog.querySelector('h2')?.textContent).toBe('Delete this conversation?');
+      expect(dialog.querySelector('p')?.textContent).toContain('"<b>Heart</b> disease by age"');
+      expect(dialog.querySelector('b')).toBeNull();
+      expect(api.deleteConversation).not.toHaveBeenCalled();
+
+      (dialog.querySelector('.secondary') as HTMLButtonElement).click();
       await fixture.whenStable();
       expect(api.deleteConversation).not.toHaveBeenCalled();
-      expect(row.querySelector('.ask')?.textContent).toBe('Delete this conversation?');
 
-      (row.querySelector('.danger') as HTMLButtonElement).click();
-      await fixture.whenStable();
-
-      expect(api.deleteConversation).toHaveBeenCalledWith(other.id);
+      await choose(fixture, row, 'Delete');
+      (document.querySelector('app-confirm-dialog .confirm') as HTMLButtonElement).click();
+      await vi.waitFor(async () => {
+        await fixture.whenStable();
+        expect(api.deleteConversation).toHaveBeenCalledWith(other.id);
+      });
       expect(titles().length).toBe(1);
+    });
+
+    it('pins a conversation into the Pinned section and unpins it back', async () => {
+      const { api, fixture, element } = await withList();
+      const sectionTitles = () =>
+        [...element.querySelectorAll('.side .section .section-toggle')].map((button) =>
+          button.textContent?.trim(),
+        );
+      expect(sectionTitles()).toEqual(['Recents']);
+
+      await choose(fixture, element.querySelectorAll('.side li')[1], 'Pin');
+      expect(api.updateConversation).toHaveBeenCalledWith(other.id, { pinned: true });
+      expect(sectionTitles()).toEqual(['Pinned', 'Recents']);
+      const pinnedRow = element.querySelector('#section-pinned li') as HTMLElement;
+      expect(pinnedRow.querySelector('.title')?.textContent?.trim()).toBe(other.title);
+
+      await choose(fixture, pinnedRow, 'Unpin');
+      expect(api.updateConversation).toHaveBeenLastCalledWith(other.id, { pinned: false });
+      expect(sectionTitles()).toEqual(['Recents']);
+    });
+
+    it('collapses a section and remembers it', async () => {
+      localStorage.removeItem('sql-agent.sections');
+      const { fixture, element } = await withList();
+      const toggle = element.querySelector('.side .section-toggle') as HTMLButtonElement;
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      toggle.click();
+      await fixture.whenStable();
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect((element.querySelector('#section-recents') as HTMLElement).hidden).toBe(true);
+      expect(JSON.parse(localStorage.getItem('sql-agent.sections')!).recents).toBe(false);
+      localStorage.removeItem('sql-agent.sections');
+    });
+
+    it('searches titles and questions on the service and shows only the matches', async () => {
+      const { api, fixture, element } = await withList();
+      api.conversations.mockResolvedValue([other]);
+      const box = element.querySelector('#conversation-search') as HTMLInputElement;
+
+      box.value = 'heart';
+      box.dispatchEvent(new Event('input'));
+      await vi.waitFor(async () => {
+        await fixture.whenStable();
+        expect(api.conversations).toHaveBeenLastCalledWith('heart');
+        expect(element.querySelectorAll('.side li').length).toBe(1);
+      });
+      expect(element.querySelector('.side .label')?.textContent).toBe('Results');
+
+      api.conversations.mockResolvedValue([]);
+      box.value = 'cancer';
+      box.dispatchEvent(new Event('input'));
+      await vi.waitFor(async () => {
+        await fixture.whenStable();
+        expect(element.querySelector('.side .empty')?.textContent).toBe(
+          'No conversations match "cancer".',
+        );
+      });
+
+      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      await fixture.whenStable();
+      expect(box.value).toBe('');
+      expect(element.querySelectorAll('.side li').length).toBe(2);
+    });
+
+    it('puts the cursor in the search box on Ctrl+K, opening the sidebar if it was a rail', async () => {
+      localStorage.setItem('sql-agent.sidebar', JSON.stringify({ width: 272, collapsed: true }));
+      const { fixture, element } = await withList();
+      expect(element.querySelector('#conversation-search')).toBeNull();
+
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
+      await fixture.whenStable();
+      expect(document.activeElement?.id).toBe('conversation-search');
+      expect(element.classList).not.toContain('collapsed');
+      localStorage.removeItem('sql-agent.sidebar');
     });
   });
 
@@ -326,13 +443,21 @@ describe('ChatPage', () => {
       (element.querySelector('.example') as HTMLButtonElement).click();
       await fixture.whenStable();
 
-      (element.querySelector('.side .hide') as HTMLButtonElement).click();
+      const toggle = () => element.querySelector('.side .toggle') as HTMLButtonElement;
+      expect(toggle().getAttribute('aria-label')).toBe('Hide conversations');
+      toggle().click();
       await fixture.whenStable();
       expect(element.classList).toContain('collapsed');
       expect(JSON.parse(localStorage.getItem('sql-agent.sidebar')!).collapsed).toBe(true);
       expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
 
-      (element.querySelector('.menu-toggle') as HTMLButtonElement).click();
+      // The rail keeps the toggle first, with New chat and Search, and no list.
+      expect(toggle().getAttribute('aria-label')).toBe('Show conversations');
+      expect(element.querySelector('.side .rail-actions')).not.toBeNull();
+      expect(element.querySelector('.side nav')).toBeNull();
+      expect(element.querySelector('.side')?.firstElementChild?.firstElementChild).toBe(toggle());
+
+      toggle().click();
       await fixture.whenStable();
       expect(element.classList).not.toContain('collapsed');
       expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');

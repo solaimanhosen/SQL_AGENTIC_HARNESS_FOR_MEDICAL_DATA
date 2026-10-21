@@ -14,9 +14,19 @@ function setup(script: Script) {
       calls.push({ question, conversationId });
       return script(question, conversationId);
     },
-    conversations: vi.fn(async (): Promise<ConversationSummary[]> => [summaryFixture()]),
+    conversations: vi.fn(async (_search?: string): Promise<ConversationSummary[]> => [
+      summaryFixture(),
+    ]),
     conversation: vi.fn(async (_id: string): Promise<ConversationDetail> => conversationFixture()),
-    renameConversation: vi.fn(async (id: string, title: string) => summaryFixture({ id, title })),
+    updateConversation: vi.fn(async (id: string, changes: { title?: string; pinned?: boolean }) =>
+      summaryFixture({
+        id,
+        ...(changes.title ? { title: changes.title } : {}),
+        ...(changes.pinned !== undefined
+          ? { pinned_at: changes.pinned ? '2026-10-21T12:00:00Z' : null }
+          : {}),
+      }),
+    ),
     deleteConversation: vi.fn(async (_id: string) => undefined),
   };
   TestBed.configureTestingModule({ providers: [{ provide: AgentApi, useValue: api }] });
@@ -194,8 +204,51 @@ describe('ChatStore', () => {
     const { store, api } = setup(answered);
     await store.refreshConversations();
     await store.rename('c'.repeat(32), 'Diabetes counts');
-    expect(api.renameConversation).toHaveBeenCalledWith('c'.repeat(32), 'Diabetes counts');
+    expect(api.updateConversation).toHaveBeenCalledWith('c'.repeat(32), {
+      title: 'Diabetes counts',
+    });
     expect(store.conversations()[0].title).toBe('Diabetes counts');
+  });
+
+  it('pins and unpins a conversation in the list and in search results', async () => {
+    const { store, api } = setup(answered);
+    await store.refreshConversations();
+    await store.search('diabetes');
+    await store.pin('c'.repeat(32), true);
+    expect(api.updateConversation).toHaveBeenCalledWith('c'.repeat(32), { pinned: true });
+    expect(store.conversations()[0].pinned_at).toBe('2026-10-21T12:00:00Z');
+    expect(store.searchResults()![0].pinned_at).toBe('2026-10-21T12:00:00Z');
+
+    await store.pin('c'.repeat(32), false);
+    expect(store.conversations()[0].pinned_at).toBeNull();
+  });
+
+  it('searches on the service, and keeps only the newest search when answers cross', async () => {
+    const { store, api } = setup(answered);
+    let releaseSlow!: () => void;
+    api.conversations.mockImplementation(async (text?: string) => {
+      if (text === 'slow') {
+        await new Promise<void>((resolve) => (releaseSlow = resolve));
+        return [summaryFixture({ title: 'stale' })];
+      }
+      return text ? [summaryFixture({ title: 'fresh' })] : [summaryFixture()];
+    });
+
+    const slow = store.search('slow');
+    await store.search('fresh');
+    releaseSlow();
+    await slow;
+    expect(store.searchResults()!.map((item) => item.title)).toEqual(['fresh']);
+
+    await store.search('   ');
+    expect(store.searchResults()).toBeNull();
+  });
+
+  it('shows no results, not an error, when a search fails', async () => {
+    const { store, api } = setup(answered);
+    api.conversations.mockRejectedValue(new ApiError(0, 'unreachable', 'Down.'));
+    await store.search('diabetes');
+    expect(store.searchResults()).toEqual([]);
   });
 
   it('deletes a conversation, and clears the screen when it is the one shown', async () => {

@@ -46,7 +46,9 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/api/agent-api.ts` | Calls the service. Reads `/api/ask/stream` with `fetch`, because the browser's `EventSource` cannot send a POST or a token. |
 | `src/app/api/sse.ts` | Parses server-sent events from text chunks that can split anywhere. |
 | `src/app/chat/chat-store.ts` | The conversation on screen and the list of stored ones: each question, its live steps, its draft and its answer. Opens, renames and deletes stored conversations, and fetches an answer from the service if only the stream was lost. |
-| `src/app/chat/sidebar.*` | The conversation list: new chat, reopen, rename, delete, hide. A drawer at phone width. |
+| `src/app/chat/sidebar.*` | The conversation list, in three modes: full, a rail of icons when collapsed, and a drawer at phone width. Its toggle stays at the same top-left spot in all of them. New chat, search (Ctrl or ⌘K), the Pinned, Recents and All chats sections, and a "⋯" menu per row to pin, rename or delete. |
+| `src/app/chat/sections.ts` | Splits the list into Pinned, the five most recent other chats, and the rest by month. Each chat lands in exactly one section. |
+| `src/app/ui/confirm-dialog.ts` | The confirmation dialog, on the CDK dialog: focus trapped, Escape cancels, Cancel focused first. |
 | `src/app/sidebar-layout.ts` | The sidebar's width limits, and remembering its width and collapsed state in local storage. |
 | `src/app/chat/exchange-view.*` | One question and what became of it: the live steps, the answer as a draft while it is written, then the checked answer or the failure. |
 | `src/app/chat/answer-view.*` | The answer and everything behind it: findings with clickable query citations, time window, definitions with their status, assumptions, caveats, traceability warnings, and what the run cost. |
