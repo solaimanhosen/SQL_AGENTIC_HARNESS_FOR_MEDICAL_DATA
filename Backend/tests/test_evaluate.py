@@ -1,3 +1,4 @@
+import dataclasses
 from datetime import date
 
 import pytest
@@ -16,7 +17,8 @@ from sql_agent.evaluate import (
     score_case,
     verify_golden_answers,
 )
-from sql_agent.tools import QueryRecord
+from sql_agent.charts import Chart
+from sql_agent.tools import AnalysisInfo, QueryRecord
 
 
 @pytest.fixture(scope="module")
@@ -131,6 +133,29 @@ def test_untraceable_answers_fail(real_db):
     issues = AnswerIssues(unsupported_findings=("a claim with no query",))
     checks = score_case(CASE, _result(issues=issues), real_db, {})
     assert not _named(checks, "traceability").passed
+
+
+def test_an_expected_analysis_and_chart_must_have_happened(real_db):
+    case = dataclasses.replace(CASE, expect={"analysis": ["trend"], "chart": "line"})
+    checks = score_case(case, _result(), real_db, {})
+    assert _named(checks, "analysis").detail == "did not run trend"
+    assert _named(checks, "chart").detail == "drew no chart, not a line chart"
+
+    trend = QueryRecord(
+        sql="SELECT start FROM encounters",
+        number=1,
+        row_count=1,
+        analysis=AnalysisInfo(tool="trend", parameters={}, source_rows=5, summary=()),
+    )
+    line = Chart(kind="line", title="t", query_number=1, x_label="p", y_label="c", x=("a",), series=())
+    checks = score_case(case, _result(queries=(trend,), charts=(line,)), real_db, {})
+    assert _named(checks, "analysis").passed and _named(checks, "chart").passed
+
+
+def test_a_chart_that_could_not_be_drawn_fails_traceability(real_db):
+    issues = AnswerIssues(chart_problems=("chart 'x': query 9 did not run",))
+    check = _named(score_case(CASE, _result(issues=issues), real_db, {}), "traceability")
+    assert not check.passed and check.detail == "chart 'x': query 9 did not run"
 
 
 def test_too_many_queries_fails(real_db):

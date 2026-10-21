@@ -75,8 +75,8 @@ Work is on the branch `sql_agent/analytics/dev`, cut from `main` at `dc67346`.
 | 2 | Backend: the analytics functions | Done | `bdf7343` |
 | 3 | Backend: analytics tools, the analysis cap, records and steps | Done | `75d7b79` |
 | 4 | Backend: chart requests, checked against the run | Done | `20491db` |
-| 5 | Interface: charts and analysis records | Done | the commit after `20491db` |
-| 6 | Evaluation cases, security catalogue, evaluation re-run | | |
+| 5 | Interface: charts and analysis records | Done | `22b77c1` |
+| 6 | Evaluation cases, security catalogue, evaluation re-run | Done | the commit after `22b77c1` |
 | 7 | Backend: HTML report, endpoint and `--report` | | |
 | 8 | Interface: report download | | |
 | 9 | Documentation, results and browser checks | | |
