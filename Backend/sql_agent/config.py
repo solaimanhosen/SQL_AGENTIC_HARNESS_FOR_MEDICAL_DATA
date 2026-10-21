@@ -53,7 +53,7 @@ class Settings:
     csv_dir: Path
     """Folder holding the Synthea CSV files that the loader reads."""
     as_of: str
-    """Anchor for relative time windows such as "last 12 months" (see docs/decisions/0002).
+    """Anchor for relative time windows such as "last 12 months" (see Documents/decisions/0002).
 
     "latest" means the last encounter date in the data, "today" means the real
     current date, and a YYYY-MM-DD value pins an explicit date.

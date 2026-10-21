@@ -35,8 +35,7 @@ an earlier one can be reopened from the sidebar and continued.
 |---|---|
 | [`Backend/`](Backend/README.md) | The agent, its safety layers, the semantic layer, the HTTP service, the evaluation and the tests. Python 3.10+. |
 | [`Frontend/`](Frontend/README.md) | The chat interface. Angular 22 and TypeScript. |
-| [`docs/`](docs/) | The semantic layer, the evaluation, the security review and the decision records. |
-| `Documents/` | Sample questions from Telligen, mapped to the Synthea tables. |
+| [`Documents/`](Documents/) | The semantic layer, the evaluation, the security review, the decision records, and sample questions from Telligen. |
 | [`CHANGELOG.md`](CHANGELOG.md) | What changed in each release. |
 
 ## Quick start
@@ -92,15 +91,15 @@ PostgreSQL design, and deployment.
 This project is proven on synthetic data only. Questions, schema descriptions and query
 results are sent to the Anthropic API. That is fine for synthetic data, and it is not fine
 for protected health information without a deployment decision first. Read the residual
-risks in [`docs/security.md`](docs/security.md) before pointing it at anything real.
+risks in [`Documents/security.md`](Documents/security.md) before pointing it at anything real.
 
 ## Further reading
 
 - [Backend guide](Backend/README.md): every command, setting and safety layer
-- [Semantic layer](docs/semantic-layer.md): the schema catalog and shared definitions
-- [Evaluation](docs/evaluation.md): how answers are scored, and the latest results
-- [Security review](docs/security.md): threats, controls, evidence and residual risks
-- [Decision records](docs/decisions/): why LangChain and Claude, and how time windows are anchored
+- [Semantic layer](Documents/semantic-layer.md): the schema catalog and shared definitions
+- [Evaluation](Documents/evaluation.md): how answers are scored, and the latest results
+- [Security review](Documents/security.md): threats, controls, evidence and residual risks
+- [Decision records](Documents/decisions/): why LangChain and Claude, and how time windows are anchored
 
 ## License
 

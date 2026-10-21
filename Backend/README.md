@@ -2,7 +2,7 @@
 
 Python backend for the SQL agent. It answers natural-language questions about the synthetic Synthea
 database by planning, running read-only SQL, and explaining the result. Design decisions are recorded
-in [docs/decisions](../docs/decisions).
+in [Documents/decisions](../Documents/decisions).
 
 ## Setup
 
@@ -105,7 +105,7 @@ answer is stored as it was sent, rows included, and titled after its conversatio
 question. Set `SQL_AGENT_STORE_RESULT_ROWS=false` to store answers without their rows, or
 `SQL_AGENT_CONVERSATIONS_PATH=off` to keep conversations in memory only. At most 1,000
 conversations are kept, and the least recently used is removed first. See
-`docs/chat-history-and-streaming.md` for the design.
+`Documents/chat-history-and-streaming.md` for the design.
 
 ```bash
 curl -sN -X POST localhost:8000/api/ask/stream -H 'Content-Type: application/json' \
@@ -145,12 +145,12 @@ it finishes. Request bodies over 16 KB get a 413. Every request, including a ref
 appended to `logs/requests.jsonl` without its body or token. Only the origins in
 `SQL_AGENT_CORS_ORIGINS` may call the service from a browser. The daily budget and the
 record of which conversations are answering live in memory, so run one server process. A
-conversation's own spending is stored with it. See `docs/security.md` for what remains a risk.
+conversation's own spending is stored with it. See `Documents/security.md` for what remains a risk.
 
 ## The semantic layer
 
 Shared definitions such as which codes count as diabetes live in
-`sql_agent/semantic/`, described in [docs/semantic-layer.md](../docs/semantic-layer.md).
+`sql_agent/semantic/`, described in [Documents/semantic-layer.md](../Documents/semantic-layer.md).
 Check them against the data, and see the text the agent will be given:
 
 ```bash
@@ -178,7 +178,7 @@ safe" below. The attack catalogue proves it, and runs without a model:
 ```
 
 The threat model, the results and the remaining risks are in
-[docs/security.md](../docs/security.md).
+[Documents/security.md](../Documents/security.md).
 
 ## Evaluation
 
@@ -192,7 +192,7 @@ change in the data is caught before the agent is asked anything.
 .venv/bin/python -m sql_agent.evaluate --category safety  # just the safety questions
 ```
 
-Results and known limitations are in [docs/evaluation.md](../docs/evaluation.md).
+Results and known limitations are in [Documents/evaluation.md](../Documents/evaluation.md).
 
 ## Tests
 

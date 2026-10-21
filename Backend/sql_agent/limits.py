@@ -12,7 +12,7 @@ until the run settles with what it actually used. A run that fails keeps its res
 since what it spent before failing is not known.
 
 The ledger lives in memory, so a restart resets the daily total. That is recorded as a
-residual risk in docs/security.md. A conversation's own total is stored with it, so its
+residual risk in Documents/security.md. A conversation's own total is stored with it, so its
 budget survives a restart.
 """
 

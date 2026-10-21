@@ -1,4 +1,4 @@
-"""Factory for the Claude chat model used by the agent (see docs/decisions/0001)."""
+"""Factory for the Claude chat model used by the agent (see Documents/decisions/0001)."""
 
 from __future__ import annotations
 

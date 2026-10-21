@@ -3,7 +3,7 @@
 Every attack here is also a test, so the catalogue and the test suite cannot disagree. The
 suite runs without a model and without a network, because it exercises the query layer
 rather than the agent's judgement. Prompt injection, which does need the model, is covered
-by the opt-in live tests described in docs/security.md.
+by the opt-in live tests described in Documents/security.md.
 
     .venv/bin/python -m sql_agent.check_security
 """

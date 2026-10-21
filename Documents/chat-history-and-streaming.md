@@ -185,7 +185,7 @@ Every new endpoint requires the access token when one is configured.
 
 - Answers and result rows are now on disk. That is fine for synthetic data. Before real
   patient data, set `SQL_AGENT_STORE_RESULT_ROWS=false` or make a deployment decision; see
-  `docs/security.md`.
+  `Documents/security.md`.
 - Everyone with the token sees every conversation.
 - The service must still run as one process. The busy flag and the daily budget are in
   memory.

@@ -2,7 +2,7 @@
 # Install:  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # Exact versions last tested together are pinned in requirements.lock.
 
-# Agent framework and model (docs/decisions/0001-agent-framework.md)
+# Agent framework and model (Documents/decisions/0001-agent-framework.md)
 langchain>=1.4,<2
 langchain-anthropic>=1.7.2,<2
 anthropic>=1.7,<2

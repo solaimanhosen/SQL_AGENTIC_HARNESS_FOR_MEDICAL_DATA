@@ -48,7 +48,7 @@ Three things constrain the design:
 ## Consequences
 
 - Answers and result rows are on disk. With real patient data that file needs the same
-  handling as the database; see `docs/security.md`.
+  handling as the database; see `Documents/security.md`.
 - A stored answer is a snapshot. If a definition is confirmed later, an old answer still
   shows the status it had when it was given.
 - The service must still run as one process.

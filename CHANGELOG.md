@@ -6,7 +6,7 @@ v1 is the backend, v2 adds the web interface.
 ## v2.1.0 — unreleased
 
 Conversations are kept, and answers appear as they are written. The design and the reasons
-behind it are in `docs/chat-history-and-streaming.md`.
+behind it are in `Documents/chat-history-and-streaming.md`.
 
 ### Added
 
@@ -34,6 +34,8 @@ behind it are in `docs/chat-history-and-streaming.md`.
 - A conversation's token budget is stored with it, so a restart no longer resets it.
 - The model still sees only the last six turns of a conversation, however long it grows.
 - "New conversation" moved from the header into the sidebar as "New chat".
+- The documentation moved from `docs/` into `Documents/`, so there is one folder for it.
+  The project brief is no longer kept in the repository.
 
 ## v2.0.0 — 9 October 2026
 
@@ -172,5 +174,5 @@ with the SQL and the evidence behind it, over a synthetic Synthea database of 10
 - The evaluation set passes completely, which says more about the set than the agent.
   Harder questions are the next addition.
 - Query results are sent to the Anthropic API. That is fine for synthetic data and needs a
-  deployment decision before any real patient data. See `docs/security.md`.
+  deployment decision before any real patient data. See `Documents/security.md`.
 - There is no authentication and no spending limit. Both belong with the web interface.

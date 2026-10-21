@@ -215,7 +215,7 @@ def load_semantic_layer(
 
 
 def resolve_as_of_date(settings: Settings, db: ReadOnlyDatabase) -> date:
-    """Return the anchor for relative time windows, following docs/decisions/0002."""
+    """Return the anchor for relative time windows, following Documents/decisions/0002."""
     if settings.as_of == "today":
         return date.today()
     if settings.as_of == "latest":

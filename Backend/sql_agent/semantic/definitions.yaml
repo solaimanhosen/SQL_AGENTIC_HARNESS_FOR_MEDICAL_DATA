@@ -221,7 +221,7 @@ definitions:
     notes:
       - Replace COLUMN with the date column and N with the number of months.
       - The as-of date is the latest date in the data, not today, so answers stay stable.
-        See docs/decisions/0002-as-of-date.md.
+        See Documents/decisions/0002-as-of-date.md.
     checks:
       - description: Emergency encounters in the last 12 months
         sql: |
