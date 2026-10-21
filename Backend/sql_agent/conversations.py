@@ -29,7 +29,10 @@ from .agent import MAX_HISTORY_TURNS, Turn
 DEFAULT_MAX_CONVERSATIONS = 1_000
 TITLE_CHARS = 60
 MAX_TITLE_CHARS = 100
+MAX_SEARCH_CHARS = 200
+SEARCH_LIMIT = 50
 
+# The schema as v3.0.0 created it. A file it wrote has user_version 0; this is version 1.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
@@ -56,6 +59,15 @@ CREATE TABLE IF NOT EXISTS turns (
 CREATE INDEX IF NOT EXISTS conversations_by_use ON conversations(updated_at);
 """
 
+# Each entry takes the schema one version further: the first gives version 2. They only
+# ever add, so a file written by any earlier version upgrades in place when it is opened.
+# Never edit one that has shipped; add a new one.
+MIGRATIONS: tuple[str, ...] = (
+    # 2: pinning. NULL means not pinned; otherwise when it was pinned, newest pin first.
+    "ALTER TABLE conversations ADD COLUMN pinned_at TEXT;",
+)
+SCHEMA_VERSION = 1 + len(MIGRATIONS)
+
 
 class UnknownConversation(KeyError):
     """The conversation was deleted, was never started, or was removed to make room."""
@@ -65,6 +77,10 @@ class ConversationBusy(RuntimeError):
     """The conversation is still answering an earlier question."""
 
 
+class NewerSchema(RuntimeError):
+    """The file was written by a newer version of this program, which this one must not alter."""
+
+
 @dataclass(frozen=True)
 class ConversationSummary:
     id: str
@@ -72,6 +88,7 @@ class ConversationSummary:
     created_at: str
     updated_at: str
     turn_count: int
+    pinned_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,7 +138,30 @@ class ConversationStore:
         self._db.execute("PRAGMA foreign_keys = ON")
         if path is not None:
             self._db.execute("PRAGMA journal_mode = WAL")
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Create the tables, or bring a file from an earlier version up to date."""
+        version = self._db.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise NewerSchema(
+                f"{self.path} is at schema version {version}, newer than this program's"
+                f" {SCHEMA_VERSION}. Use the newer program, or another conversations file."
+            )
         self._db.executescript(SCHEMA)
+        for number, script in enumerate(MIGRATIONS, start=2):
+            if max(version, 1) < number:
+                # One transaction per step, so a failed step leaves the file at the last good one.
+                try:
+                    self._db.executescript(f"BEGIN; {script} PRAGMA user_version = {number}; COMMIT;")
+                except sqlite3.Error:
+                    if self._db.in_transaction:
+                        self._db.execute("ROLLBACK")
+                    raise
+
+    def schema_version(self) -> int:
+        with self._lock:
+            return self._db.execute("PRAGMA user_version").fetchone()[0]
 
     def begin(self, conversation_id: str | None) -> tuple[str, tuple[Turn, ...], int]:
         """Claim a conversation for one question. Returns its id, its turns and the turn number.
@@ -214,6 +254,25 @@ class ConversationStore:
             ).fetchall()
             return [_summary(row) for row in rows]
 
+    def search(self, text: str) -> list[ConversationSummary]:
+        """Conversations whose title or any question contains the text, most recently used first.
+
+        Matching ignores case for English letters. The text is matched literally: % and _ are
+        not wildcards here.
+        """
+        words = " ".join(text.split())[:MAX_SEARCH_CHARS]
+        if not words:
+            return self.list()
+        pattern = "%" + words.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM conversations c WHERE c.turn_count > 0 AND (c.title LIKE :p ESCAPE '\\'"
+                " OR EXISTS (SELECT 1 FROM turns t WHERE t.conversation_id = c.id AND t.question LIKE :p ESCAPE '\\'))"
+                " ORDER BY c.updated_at DESC LIMIT :limit",
+                {"p": pattern, "limit": SEARCH_LIMIT},
+            ).fetchall()
+            return [_summary(row) for row in rows]
+
     def get(self, conversation_id: str) -> StoredConversation:
         with self._lock:
             row = self._row(conversation_id)
@@ -244,6 +303,19 @@ class ConversationStore:
         with self._lock:
             self._row(conversation_id)
             self._db.execute("UPDATE conversations SET title = ? WHERE id = ?", (title, conversation_id))
+            return _summary(self._row(conversation_id))
+
+    def pin(self, conversation_id: str, pinned: bool) -> ConversationSummary:
+        """Pin or unpin. Pinning again keeps the original time; neither counts as use."""
+        with self._lock:
+            self._row(conversation_id)
+            if pinned:
+                self._db.execute(
+                    "UPDATE conversations SET pinned_at = COALESCE(pinned_at, ?) WHERE id = ?",
+                    (self._now(), conversation_id),
+                )
+            else:
+                self._db.execute("UPDATE conversations SET pinned_at = NULL WHERE id = ?", (conversation_id,))
             return _summary(self._row(conversation_id))
 
     def delete(self, conversation_id: str) -> None:
@@ -277,7 +349,10 @@ class ConversationStore:
         excess = self._db.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] - self.max_conversations
         if excess <= 0:
             return
-        for (conversation_id,) in self._db.execute("SELECT id FROM conversations ORDER BY updated_at").fetchall():
+        # Unpinned conversations go first, least recently used first; pinned ones only after.
+        for (conversation_id,) in self._db.execute(
+            "SELECT id FROM conversations ORDER BY pinned_at IS NOT NULL, updated_at"
+        ).fetchall():
             if excess <= 0:
                 break
             if conversation_id not in self._busy:
@@ -292,4 +367,5 @@ def _summary(row: sqlite3.Row) -> ConversationSummary:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         turn_count=row["turn_count"],
+        pinned_at=row["pinned_at"],
     )

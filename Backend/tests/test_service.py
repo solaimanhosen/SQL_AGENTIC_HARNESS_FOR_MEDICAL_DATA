@@ -643,6 +643,31 @@ def test_a_conversation_can_be_renamed_and_deleted(settings, db):
     assert len(agent.questions) == 1
 
 
+def test_a_conversation_can_be_pinned_and_unpinned(settings, db):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    assert client.get("/api/conversations").json()[0]["pinned_at"] is None
+
+    pinned = client.patch(f"/api/conversations/{conversation_id}", json={"pinned": True})
+    assert pinned.status_code == 200 and pinned.json()["pinned_at"] is not None
+    assert client.get("/api/conversations").json()[0]["pinned_at"] == pinned.json()["pinned_at"]
+
+    both = client.patch(f"/api/conversations/{conversation_id}", json={"title": "Kept", "pinned": False})
+    assert both.json()["title"] == "Kept" and both.json()["pinned_at"] is None
+    for body in ({}, {"pinned": "yes please"}, {"title": None, "pinned": None}):
+        assert client.patch(f"/api/conversations/{conversation_id}", json=body).status_code == 422
+
+
+def test_conversations_can_be_searched(settings, db):
+    client, _ = _client(settings, db)
+    diabetes = _ask(client, "How many have diabetes?")["conversation_id"]
+    _ask(client, "Emergency visits by month")
+    found = client.get("/api/conversations", params={"q": "DIABETES"})
+    assert found.status_code == 200 and [item["id"] for item in found.json()] == [diabetes]
+    assert len(client.get("/api/conversations", params={"q": "  "}).json()) == 2
+    assert client.get("/api/conversations", params={"q": "x" * 201}).status_code == 422
+
+
 def test_a_conversation_still_answering_cannot_be_deleted(settings, db):
     store = ConversationStore()
     client, _ = _client(settings, db, conversations=store)

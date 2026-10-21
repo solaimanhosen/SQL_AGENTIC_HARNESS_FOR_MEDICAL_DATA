@@ -33,12 +33,12 @@ from typing import Literal
 
 import anthropic
 import anyio
-from fastapi import APIRouter, Depends, FastAPI, Path, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.datastructures import Headers
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
@@ -47,6 +47,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from .agent import AgentError, AgentResult, SqlAgent, Turn, describe_failure
 from .answer import Draft
 from .conversations import (
+    MAX_SEARCH_CHARS,
     MAX_TITLE_CHARS,
     ConversationBusy,
     ConversationStore,
@@ -115,6 +116,8 @@ class ConversationOut(BaseModel):
     updated_at: datetime
     turns: int
     """Questions answered in it so far."""
+    pinned_at: datetime | None = None
+    """When it was pinned, or nothing if it is not."""
 
 
 class StoredTurnOut(BaseModel):
@@ -132,8 +135,17 @@ class ConversationDetailOut(ConversationOut):
     history: list[StoredTurnOut]
 
 
-class RenameRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=MAX_TITLE_CHARS, pattern=r"\S")
+class UpdateConversationRequest(BaseModel):
+    """A new title, a pin or an unpin, or both. Fields left out are not changed."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=MAX_TITLE_CHARS, pattern=r"\S")
+    pinned: bool | None = None
+
+    @model_validator(mode="after")
+    def _something(self) -> "UpdateConversationRequest":
+        if self.title is None and self.pinned is None:
+            raise ValueError("Send a title, pinned, or both.")
+        return self
 
 
 ConversationId = Path(pattern=CONVERSATION_ID_PATTERN)
@@ -284,9 +296,15 @@ def create_app(
         return [definition_payload(agent.layer, name) for name in agent.layer.definitions]
 
     @protected.get("/api/conversations")
-    def list_conversations() -> list[ConversationOut]:
-        """Conversations with at least one answer, most recently used first."""
-        return [_conversation_out(summary) for summary in conversations.list()]
+    def list_conversations(
+        q: str | None = Query(default=None, max_length=MAX_SEARCH_CHARS, description="Text to look for in titles and questions."),
+    ) -> list[ConversationOut]:
+        """Conversations with at least one answer, most recently used first.
+
+        With `q`, only those whose title or any question contains it, at most 50.
+        """
+        found = conversations.search(q) if q and q.strip() else conversations.list()
+        return [_conversation_out(summary) for summary in found]
 
     @protected.get("/api/conversations/{conversation_id}")
     def get_conversation(conversation_id: str = ConversationId) -> ConversationDetailOut:
@@ -331,8 +349,14 @@ def create_app(
         )
 
     @protected.patch("/api/conversations/{conversation_id}")
-    def rename_conversation(request: RenameRequest, conversation_id: str = ConversationId) -> ConversationOut:
-        return _conversation_out(conversations.rename(conversation_id, request.title))
+    def update_conversation(request: UpdateConversationRequest, conversation_id: str = ConversationId) -> ConversationOut:
+        """Rename, pin or unpin. Neither counts as using the conversation."""
+        summary = None
+        if request.title is not None:
+            summary = conversations.rename(conversation_id, request.title)
+        if request.pinned is not None:
+            summary = conversations.pin(conversation_id, request.pinned)
+        return _conversation_out(summary)
 
     @protected.delete("/api/conversations/{conversation_id}", status_code=204)
     def delete_conversation(conversation_id: str = ConversationId) -> Response:
@@ -462,6 +486,7 @@ def _conversation_out(summary: ConversationSummary) -> ConversationOut:
         created_at=summary.created_at,
         updated_at=summary.updated_at,
         turns=summary.turn_count,
+        pinned_at=summary.pinned_at,
     )
 
 

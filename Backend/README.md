@@ -100,9 +100,9 @@ curl -s -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \
 | GET | `/api/usage` | Questions running now and tokens spent today against the daily budget. |
 | POST | `/api/ask` | The answer, its findings, the SQL with its rows, and any traceability warnings. |
 | POST | `/api/ask/stream` | The same answer, preceded by each step as it happens and by the answer text as it is written, as server-sent events. |
-| GET | `/api/conversations` | Stored conversations with at least one answer, most recently used first. |
+| GET | `/api/conversations` | Stored conversations with at least one answer, most recently used first. With `?q=text`, only those whose title or any question contains it, at most 50. |
 | GET | `/api/conversations/{id}` | One conversation: every question with its answer and steps as first sent, and whether it is still answering. |
-| PATCH | `/api/conversations/{id}` | Rename it, with `{"title": "..."}` of 1 to 100 characters. |
+| PATCH | `/api/conversations/{id}` | Rename it with `{"title": "..."}` (1 to 100 characters), pin or unpin it with `{"pinned": true}`, or both. Neither counts as use. |
 | DELETE | `/api/conversations/{id}` | Delete it and its answers. A conversation still answering gets a 409. |
 | GET | `/api/conversations/{id}/turns/{turn}/report` | One stored answer as a self-contained HTML report, as a download. |
 
@@ -126,8 +126,13 @@ patient database, so they survive a restart and can be listed, reopened and cont
 answer is stored as it was sent, rows included, and titled after its conversation's first
 question. Set `SQL_AGENT_STORE_RESULT_ROWS=false` to store answers without their rows, or
 `SQL_AGENT_CONVERSATIONS_PATH=off` to keep conversations in memory only. At most 1,000
-conversations are kept, and the least recently used is removed first. See
-`Documents/chat-history-and-streaming.md` for the design.
+conversations are kept, and the least recently used unpinned one is removed first; pinned
+ones go only after every unpinned one. See `Documents/chat-history-and-streaming.md` for the
+design.
+
+The file carries a schema version (`PRAGMA user_version`). Opening a file from an earlier
+version upgrades it in place, one recorded step at a time, so nothing stored is lost. A file
+from a newer version is refused untouched, and the service will not start on it.
 
 ```bash
 curl -sN -X POST localhost:8000/api/ask/stream -H 'Content-Type: application/json' \

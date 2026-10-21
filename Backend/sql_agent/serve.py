@@ -18,6 +18,7 @@ import sys
 import uvicorn
 
 from .config import ConfigError, load_api_token, load_settings
+from .conversations import NewerSchema
 from .service import create_app
 
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -47,7 +48,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(f"Access token {'required' if api_token else 'not set, open to this machine only'}.", file=sys.stderr)
-    uvicorn.run(create_app(api_token=api_token), host=args.host, port=args.port)
+    try:
+        app = create_app(api_token=api_token)
+    except NewerSchema as exc:
+        print(f"Conversations file error: {exc}", file=sys.stderr)
+        return 1
+    uvicorn.run(app, host=args.host, port=args.port)
     return 0
 
 
