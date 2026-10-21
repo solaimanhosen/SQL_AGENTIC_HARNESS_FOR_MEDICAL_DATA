@@ -31,7 +31,7 @@ export class ApiError extends Error {
 }
 
 export const UNREACHABLE =
-  'The service could not be reached. Start it from the Backend folder with: .venv/bin/python -m sql_agent.serve';
+  'The service could not be reached. Check that it is running, then try again.';
 
 @Injectable({ providedIn: 'root' })
 export class AgentApi {

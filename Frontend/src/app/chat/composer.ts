@@ -1,10 +1,12 @@
 import { Component, computed, input, output, signal } from '@angular/core';
+import { LucideArrowUp } from '@lucide/angular';
 
 import { MAX_QUESTION_CHARS } from './chat-store';
 
 /** The question box. Enter sends, Shift+Enter starts a new line. */
 @Component({
   selector: 'app-composer',
+  imports: [LucideArrowUp],
   template: `
     <form class="composer" (submit)="send($event)">
       <label class="visually-hidden" for="question">Your question</label>
@@ -21,38 +23,64 @@ import { MAX_QUESTION_CHARS } from './chat-store';
         @if (text().length > max * 0.8) {
           <span class="count">{{ text().length }} / {{ max }}</span>
         }
-        <button type="submit" [disabled]="!canSend()">Ask</button>
+        <button
+          type="submit"
+          class="icon send"
+          aria-label="Ask"
+          title="Ask"
+          [disabled]="!canSend()"
+        >
+          <svg lucideArrowUp [size]="18"></svg>
+        </button>
       </div>
     </form>
   `,
   styles: `
     .composer {
-      display: flex;
-      gap: 0.6rem;
-      align-items: flex-end;
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-xl);
+      background: var(--surface);
+      box-shadow: var(--shadow-2);
+      transition: border-color var(--duration-fast) var(--ease);
+    }
+    .composer:focus-within {
+      border-color: var(--accent);
+      box-shadow:
+        0 0 0 3px var(--focus-ring),
+        var(--shadow-2);
     }
     textarea {
-      flex: 1;
+      width: 100%;
+      min-height: 3rem;
+      padding: var(--space-2) 0 0;
+      border: 0;
       resize: none;
-      padding: 0.65rem 0.8rem;
-      border: 1px solid var(--border);
-      border-radius: 0.6rem;
-      background: var(--surface);
-      color: var(--text);
-      font: inherit;
+      background: transparent;
+      font-size: var(--text-base);
+      line-height: var(--leading);
     }
     textarea:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 1px;
+      outline: none;
+    }
+    textarea::placeholder {
+      color: var(--text-subtle);
     }
     .actions {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      justify-content: flex-end;
+      gap: var(--space-2);
     }
     .count {
-      color: var(--text-muted);
-      font-size: 0.8rem;
+      color: var(--text-subtle);
+      font-size: var(--text-xs);
+      font-variant-numeric: tabular-nums;
+    }
+    .send {
+      border-radius: var(--radius-full);
     }
   `,
 })

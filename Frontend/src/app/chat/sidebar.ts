@@ -9,6 +9,7 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
+import { LucidePanelLeftClose, LucideSquarePen } from '@lucide/angular';
 
 import { ConversationSummary } from '../api/types';
 
@@ -20,6 +21,7 @@ export const MAX_TITLE_CHARS = 100;
  */
 @Component({
   selector: 'app-sidebar',
+  imports: [LucidePanelLeftClose, LucideSquarePen],
   templateUrl: './sidebar.html',
   styleUrl: './sidebar.css',
 })

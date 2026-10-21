@@ -12,6 +12,7 @@ import { Component, output, signal } from '@angular/core';
       <div class="row">
         <input
           id="token"
+          class="field"
           type="password"
           autocomplete="off"
           [value]="token()"
@@ -25,29 +26,19 @@ import { Component, output, signal } from '@angular/core';
   styles: `
     .token {
       display: grid;
-      gap: 0.5rem;
-      padding: 0.9rem 1.1rem;
-      border: 1px solid var(--border);
-      border-radius: 0.75rem;
-      background: var(--surface);
+      gap: var(--space-2);
+    }
+    label {
+      font-weight: var(--weight-medium);
     }
     .row {
       display: flex;
-      gap: 0.5rem;
-    }
-    input {
-      flex: 1;
-      padding: 0.5rem 0.7rem;
-      border: 1px solid var(--border);
-      border-radius: 0.5rem;
-      background: var(--bg);
-      color: var(--text);
-      font: inherit;
+      gap: var(--space-2);
     }
     .hint {
       margin: 0;
-      color: var(--text-muted);
-      font-size: 0.8rem;
+      color: var(--text-subtle);
+      font-size: var(--text-xs);
     }
   `,
 })

@@ -46,18 +46,18 @@ export const PREVIEW_ROWS = 10;
     }
     .scroll {
       overflow-x: auto;
-      margin-top: 0.4rem;
+      margin-top: var(--space-1-5);
       border: 1px solid var(--border);
-      border-radius: 0.4rem;
+      border-radius: var(--radius-sm);
     }
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.82rem;
+      font-size: var(--text-sm);
     }
     th,
     td {
-      padding: 0.3rem 0.6rem;
+      padding: var(--space-1) var(--space-2-5);
       text-align: left;
       vertical-align: top;
       overflow-wrap: normal;
@@ -80,7 +80,7 @@ export const PREVIEW_ROWS = 10;
       font-style: italic;
     }
     button {
-      margin-top: 0.4rem;
+      margin-top: var(--space-1-5);
     }
   `,
 })

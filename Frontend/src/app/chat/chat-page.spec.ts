@@ -1,9 +1,12 @@
 import { TestBed } from '@angular/core/testing';
+import { Router } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
 
-import { AgentApi, ApiError, UNREACHABLE } from './api/agent-api';
-import { ConversationSummary, Health, StreamEvent } from './api/types';
-import { App, EXAMPLE_QUESTIONS } from './app';
-import { answerFixture, conversationFixture, summaryFixture } from './testing/fixtures';
+import { AgentApi, ApiError, UNREACHABLE } from '../api/agent-api';
+import { ConversationSummary, Health, StreamEvent } from '../api/types';
+import { provideAppRouter } from '../app.config';
+import { answerFixture, conversationFixture, summaryFixture } from '../testing/fixtures';
+import { ChatPage, EXAMPLE_QUESTIONS } from './chat-page';
 
 const HEALTH: Health = {
   status: 'ok',
@@ -28,14 +31,22 @@ function fakeApi(
   };
 }
 
-async function render(api: ReturnType<typeof fakeApi>) {
+/** Open the app at an address, as a page load would, and return the chat page. */
+async function render(api: ReturnType<typeof fakeApi>, url = '/') {
   TestBed.configureTestingModule({
-    imports: [App],
-    providers: [{ provide: AgentApi, useValue: api }],
+    providers: [{ provide: AgentApi, useValue: api }, provideAppRouter()],
   });
-  const fixture = TestBed.createComponent(App);
+  const harness = await RouterTestingHarness.create();
+  await harness.navigateByUrl(url, ChatPage);
+  const fixture = harness.fixture;
   await fixture.whenStable();
-  return { fixture, element: fixture.nativeElement as HTMLElement };
+  const element = harness.routeNativeElement as HTMLElement;
+  return { fixture, element, harness };
+}
+
+/** The address the router is showing. */
+function address(): string {
+  return TestBed.inject(Router).url;
 }
 
 async function* answers(overrides = {}): AsyncGenerator<StreamEvent> {
@@ -43,10 +54,7 @@ async function* answers(overrides = {}): AsyncGenerator<StreamEvent> {
   yield { type: 'answer', answer: answerFixture(overrides) };
 }
 
-describe('App', () => {
-  // A question puts its conversation in the address, which must not leak into the next test.
-  afterEach(() => history.replaceState(null, '', location.pathname));
-
+describe('ChatPage', () => {
   it('shows the service status and the example questions', async () => {
     const { element } = await render(fakeApi(answers));
     expect(element.querySelector('.status')?.textContent).toContain(
@@ -58,13 +66,16 @@ describe('App', () => {
     expect(examples).toEqual(EXAMPLE_QUESTIONS);
   });
 
-  it('says how to start the service when it cannot be reached', async () => {
+  it('says plainly when the service cannot be reached, without developer commands', async () => {
     const { element } = await render(
       fakeApi(answers, async () => {
         throw new ApiError(0, 'unreachable', UNREACHABLE);
       }),
     );
-    expect(element.querySelector('.status')?.textContent).toContain('sql_agent.serve');
+    const status = element.querySelector('.status');
+    expect(status?.textContent).toContain('The service cannot be reached');
+    expect(status?.textContent).not.toContain('sql_agent');
+    expect(status?.classList).toContain('down');
   });
 
   it('asks an example question and shows the answer with its citations', async () => {
@@ -177,10 +188,10 @@ describe('App', () => {
   describe('with stored conversations', () => {
     const other = summaryFixture({ id: 'd'.repeat(32), title: '<b>Heart</b> disease by age' });
 
-    async function withList() {
+    async function withList(url = '/') {
       const api = fakeApi(answers);
       api.conversations.mockResolvedValue([summaryFixture(), other]);
-      const rendered = await render(api);
+      const rendered = await render(api, url);
       const titles = () => [
         ...rendered.element.querySelectorAll<HTMLButtonElement>('.side .title'),
       ];
@@ -204,12 +215,12 @@ describe('App', () => {
       );
       expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
       expect(titles()[0].getAttribute('aria-current')).toBe('true');
-      expect(location.hash).toBe('#' + 'c'.repeat(32));
+      expect(address()).toBe('/c/' + 'c'.repeat(32));
+      expect(element.querySelector('h1')?.textContent).toBe('How many patients have diabetes?');
     });
 
     it('returns to the conversation named in the address after a reload', async () => {
-      history.replaceState(null, '', '#' + 'c'.repeat(32));
-      const { api, fixture, element } = await withList();
+      const { api, fixture, element } = await withList('/c/' + 'c'.repeat(32));
       await vi.waitFor(async () => {
         await fixture.whenStable();
         expect(element.querySelector('.headline')?.textContent).toBe(
@@ -219,16 +230,53 @@ describe('App', () => {
       expect(api.conversation).toHaveBeenCalledWith('c'.repeat(32));
     });
 
+    it('moves a link from before the router, with the id after "#", to the new address', async () => {
+      const { api, fixture } = await withList('/#' + 'c'.repeat(32));
+      await vi.waitFor(async () => {
+        await fixture.whenStable();
+        expect(address()).toBe('/c/' + 'c'.repeat(32));
+      });
+      expect(api.conversation).toHaveBeenCalledTimes(1);
+    });
+
     it('starts a new chat, clearing the screen and the address', async () => {
-      history.replaceState(null, '', '#' + 'c'.repeat(32));
-      const { fixture, element } = await withList();
+      const { fixture, element } = await withList('/c/' + 'c'.repeat(32));
+      await vi.waitFor(async () => {
+        await fixture.whenStable();
+        expect(element.querySelector('.question')).not.toBeNull();
+      });
 
       (element.querySelector('.side .new') as HTMLButtonElement).click();
-      await fixture.whenStable();
+      await vi.waitFor(async () => {
+        await fixture.whenStable();
+        expect(address()).toBe('/');
+      });
 
       expect(element.querySelector('.question')).toBeNull();
       expect(element.querySelector('.intro')).not.toBeNull();
-      expect(location.hash).toBe('');
+    });
+
+    it('goes back to the address of a conversation that does not exist', async () => {
+      const api = fakeApi(answers);
+      api.conversation.mockRejectedValue(
+        new ApiError(404, 'unknown_conversation', 'No such conversation.'),
+      );
+      const { fixture, element } = await render(api, '/c/' + 'e'.repeat(32));
+      await vi.waitFor(async () => {
+        await fixture.whenStable();
+        expect(address()).toBe('/');
+      });
+      expect(element.querySelector('.intro')).not.toBeNull();
+    });
+
+    it('puts a new chat in the address once the service gives it an id', async () => {
+      const { fixture, element } = await render(fakeApi(answers));
+      (element.querySelector('.example') as HTMLButtonElement).click();
+      await vi.waitFor(async () => {
+        await fixture.whenStable();
+        expect(address()).toBe('/c/' + 'c'.repeat(32));
+      });
+      expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
     });
 
     it('renames a conversation from the list', async () => {
@@ -284,7 +332,7 @@ describe('App', () => {
       expect(JSON.parse(localStorage.getItem('sql-agent.sidebar')!).collapsed).toBe(true);
       expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
 
-      (element.querySelector('.menu') as HTMLButtonElement).click();
+      (element.querySelector('.menu-toggle') as HTMLButtonElement).click();
       await fixture.whenStable();
       expect(element.classList).not.toContain('collapsed');
       expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');

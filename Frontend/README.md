@@ -23,7 +23,7 @@ cd ../Backend
 
 The development server forwards every `/api` request to the service
 (`proxy.conf.json`), so the browser sees one origin, just as it would behind a production
-web server. If the service is not running, the header says so and explains how to start it.
+web server. If the service is not running, the header says so.
 
 If the service was started with `SQL_AGENT_API_TOKEN`, the page asks for the token after
 the first refusal. It keeps the token in memory until the page is closed or reloaded, and
@@ -58,7 +58,10 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/chat/step-log.ts` | Every step the agent took, with the SQL of each query, live and afterwards. |
 | `src/app/chat/composer.ts` | The question box. Enter sends, Shift+Enter adds a line. |
 | `src/app/chat/token-prompt.ts` | Asks for the access token when the service requires one. |
-| `src/app/app.*` | The page: sidebar with its draggable edge, service status, example questions, the thread and the question box. Keeps the open conversation's id in the address, so a reload returns to it. |
+| `src/app/app.ts`, `app.routes.ts`, `app.config.ts` | The root, which is only a router outlet, and the routes: `/` is a new chat and `/c/<id>` a stored one, matched by one route so the page is kept when a new chat gets its id. Old `/#<id>` links are moved to the new address. |
+| `src/app/chat/chat-page.*` | The chat screen: sidebar with its draggable edge, the header with service status and the theme menu, example questions, the thread and the question box. Keeps the address and the conversation on screen in step. |
+| `src/app/ui/theme.ts`, `theme-toggle.ts` | System, light or dark. The choice is kept in this browser; `index.html` applies it before the app starts. |
+| `src/styles.css` | The design tokens (spacing, type, radii, shadows, colours for both themes) and the shared controls: buttons, fields, cards, chips and menus. |
 
 ## What an answer shows
 
@@ -93,6 +96,13 @@ Files are named after the conversation and the question, such as
 extra is sent anywhere; the report is fetched from the service.
 
 ## Rules worth keeping
+
+- **Use the tokens.** Spacing, font sizes, radii, shadows and colours come from the variables
+  in `src/styles.css`, never raw values, so the whole interface stays on one scale and both
+  themes work. A new colour needs a value for each theme.
+- **Global class names are shared.** `.menu`, `.menu-item`, `.chip`, `.card`, `.field` and the
+  button classes (`.secondary`, `.ghost`, `.icon`, `.tool`, `.danger`) are defined once in
+  `styles.css`. Do not reuse those names for something else in a component.
 
 - **Text from the service is text.** Answers can quote database content, and database
   content can carry injected instructions or markup. Everything is rendered through Angular

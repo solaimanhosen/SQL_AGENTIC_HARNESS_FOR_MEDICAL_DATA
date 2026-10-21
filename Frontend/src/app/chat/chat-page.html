@@ -41,42 +41,39 @@
   <header class="bar">
     <button
       type="button"
-      class="secondary menu"
+      class="ghost icon menu-toggle"
       aria-label="Show conversations"
       title="Show conversations"
       [attr.aria-expanded]="menuOpen()"
       (click)="showSidebar()"
     >
-      <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-        <rect
-          x="2.5"
-          y="3.5"
-          width="15"
-          height="13"
-          rx="2"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-        />
-        <path d="M7.5 3.5v13" stroke="currentColor" stroke-width="1.5" />
-      </svg>
+      <svg lucidePanelLeft [size]="18"></svg>
     </button>
     <div class="title">
-      <h1>Patient data questions</h1>
-      <p class="status" [class.down]="health() === 'unreachable'" role="status">
+      <h1>{{ title() || 'Patient data questions' }}</h1>
+      <p
+        class="status"
+        [class.ok]="healthInfo()?.status === 'ok'"
+        [class.down]="health() === 'unreachable'"
+        role="status"
+      >
+        <span class="dot" aria-hidden="true"></span>
         @switch (health()) {
           @case ('checking') {
-            Connecting to the service…
+            <span>Connecting to the service…</span>
           }
           @case ('unreachable') {
-            Service unreachable. Start it with: .venv/bin/python -m sql_agent.serve
+            <span>The service cannot be reached</span>
           }
           @default {
             @let info = healthInfo()!;
-            {{ info.model }} · synthetic data as of {{ info.as_of }}
+            <span>{{ info.model }} · synthetic data as of {{ info.as_of }}</span>
           }
         }
       </p>
+    </div>
+    <div class="actions">
+      <app-theme-toggle />
     </div>
   </header>
 
@@ -116,15 +113,19 @@
   </main>
 
   <footer class="composer-bar">
-    <app-composer
-      [busy]="store.busy()"
-      [placeholder]="
-        store.exchanges().length
-          ? 'Ask a follow-up, or a new question'
-          : 'Ask a question about the patient data'
-      "
-      (ask)="ask($event)"
-    />
-    <p class="note">Synthetic Synthea data. Questions and results are sent to the Anthropic API.</p>
+    <div class="composer-inner">
+      <app-composer
+        [busy]="store.busy()"
+        [placeholder]="
+          store.exchanges().length
+            ? 'Ask a follow-up, or a new question'
+            : 'Ask a question about the patient data'
+        "
+        (ask)="ask($event)"
+      />
+      <p class="note">
+        Synthetic Synthea data. Questions and results are sent to the Anthropic API.
+      </p>
+    </div>
   </footer>
 </div>

@@ -1,32 +1,23 @@
 <div class="top">
-  <button type="button" class="new" [disabled]="busy()" (click)="newChat.emit()">New chat</button>
+  <p class="brand">
+    <span class="mark" aria-hidden="true">PQ</span>
+    <span>Patient data questions</span>
+  </p>
   <button
     type="button"
-    class="hide"
+    class="ghost icon hide"
     aria-label="Hide conversations"
     title="Hide conversations"
     (click)="collapse.emit()"
   >
-    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-      <rect
-        x="2.5"
-        y="3.5"
-        width="15"
-        height="13"
-        rx="2"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.5"
-      />
-      <path
-        d="M7.5 3.5v13M13.5 7.5 11 10l2.5 2.5"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.5"
-      />
-    </svg>
+    <svg lucidePanelLeftClose [size]="18"></svg>
   </button>
 </div>
+
+<button type="button" class="secondary new" [disabled]="busy()" (click)="newChat.emit()">
+  <svg lucideSquarePen [size]="16"></svg>
+  <span>New chat</span>
+</button>
 
 <nav aria-label="Conversations">
   @if (!conversations().length) {

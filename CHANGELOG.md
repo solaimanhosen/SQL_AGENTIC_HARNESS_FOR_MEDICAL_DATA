@@ -3,6 +3,29 @@
 Notable changes to this project, newest first. Versions follow the project milestones:
 v1 is the backend, v2 adds the web interface, v3 adds analytics, charts and reports.
 
+## Unreleased (Phase D, to be v4.0.0)
+
+Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-accounts.md`.
+
+### Added
+
+- A design system in `styles.css`: spacing, type, radius, shadow and motion tokens, and
+  colours for a light and a dark theme. Every component uses them.
+- A theme menu in the header: System, Light or Dark, remembered in this browser and applied
+  before the page first paints.
+- The Inter typeface, self-hosted, and Lucide icons. Angular CDK for menus.
+- Conversation addresses `/c/<id>`, with back and forward between conversations. Old
+  `/#<id>` links still open.
+
+### Changed
+
+- The conversation column is 60rem wide instead of 52rem, with prose kept to a readable
+  line length. The header and the question box span the whole pane.
+- The question box is a single card with a send button, and the example questions are
+  cards.
+- The header shows the open conversation's title and a status dot.
+- When the service cannot be reached, the message no longer tells users to run a command.
+
 ## v3.0.0 — 21 October 2026
 
 The agent computes statistics, answers carry charts, and any answer downloads as a
