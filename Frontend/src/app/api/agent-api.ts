@@ -74,6 +74,14 @@ export class AgentApi {
     await this.request(`/conversations/${id}`, { method: 'DELETE' });
   }
 
+  /** One stored answer as a self-contained HTML report, made by the service. */
+  async report(id: string, turn: number): Promise<string> {
+    const response = await this.request(`/conversations/${id}/turns/${turn}/report`, {
+      method: 'GET',
+    });
+    return response.text();
+  }
+
   /**
    * Ask a question and yield each event as it arrives: the conversation first, then each
    * step, then the answer as a draft while it is written, then the complete answer. A failure, whether before or during the stream, throws ApiError.

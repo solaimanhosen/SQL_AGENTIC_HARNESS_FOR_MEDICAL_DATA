@@ -25,6 +25,13 @@ patients, so no real patient data is involved.
 4. **Explain.** It returns a structured answer in which every figure cites its query. The
    system compares the answer with what actually ran and flags anything it cannot trace.
 
+For statistics the agent calls a fixed set of analytics tools: summaries such as a median
+over thousands of rows, trends judged by a Mann-Kendall test, and group comparisons with
+Fisher's exact test or a permutation test. The model chooses the tool and writes its SQL;
+the numbers are computed in code. An answer can carry bar and line charts, drawn from the
+rows of the query each one cites, and any answer downloads as a self-contained HTML report
+that opens with no network.
+
 Follow-up questions build on the conversation, each step appears live while the agent
 works, and the answer appears as a draft while it is written. Conversations are stored, so
 an earlier one can be reopened from the sidebar and continued.
@@ -66,10 +73,10 @@ Prefer the terminal? From `Backend/`:
 
 | Check | Command, run from `Backend/` unless noted | Current result |
 |---|---|---|
-| Backend tests, no network | `.venv/bin/python -m pytest -q` | 238 passed |
-| Attack catalogue | `.venv/bin/python -m sql_agent.check_security` | 35 of 35 blocked |
-| Evaluation against hand-verified answers | `.venv/bin/python -m sql_agent.evaluate` | 20 of 20 |
-| Interface tests, from `Frontend/` | `npm test -- --watch=false` | 53 passed |
+| Backend tests, no network | `.venv/bin/python -m pytest -q` | 375 passed |
+| Attack catalogue | `.venv/bin/python -m sql_agent.check_security` | 78 of 78 as expected |
+| Evaluation against hand-verified answers | `.venv/bin/python -m sql_agent.evaluate` | 23 of 23 |
+| Interface tests, from `Frontend/` | `npm test -- --watch=false` | 108 passed |
 
 The evaluation calls the model and costs money. Add `--dry-run` to check only the known
 answers against the data, for free.
@@ -82,9 +89,10 @@ answers against the data, for free.
 | v1.1.0 | The HTTP service: follow-up questions, live steps, access token, spending limits |
 | v2.0.0 | The web interface: chat, live steps, transparency panels, result tables, CSV and JSON downloads |
 | v2.1.0 | Stored conversations with a sidebar to reopen, rename and delete them, and answers streamed as they are written |
+| v3.0.0 | Analytics tools, charts drawn from the run, and self-contained HTML reports |
 
-Still to come: analytics and charts over query results, self-contained HTML reports, a
-PostgreSQL design, and deployment.
+Still to come: choosing the model and effort in the interface, a PostgreSQL design, and
+deployment.
 
 ## Before using real data
 
@@ -99,7 +107,8 @@ risks in [`Documents/security.md`](Documents/security.md) before pointing it at 
 - [Semantic layer](Documents/semantic-layer.md): the schema catalog and shared definitions
 - [Evaluation](Documents/evaluation.md): how answers are scored, and the latest results
 - [Security review](Documents/security.md): threats, controls, evidence and residual risks
-- [Decision records](Documents/decisions/): why LangChain and Claude, and how time windows are anchored
+- [Analytics, charts and reports](Documents/analytics-and-reports.md): the design and results of v3.0.0
+- [Decision records](Documents/decisions/): why LangChain and Claude, how time windows are anchored, where conversations are stored, and how analytics are computed
 
 ## License
 

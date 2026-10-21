@@ -41,6 +41,7 @@ def build_record(result: "AgentResult", *, conversation_id: str | None = None) -
         ),
         "assumptions": list(structured.assumptions) if structured else [],
         "caveats": list(structured.caveats) if structured else [],
+        "charts": [chart.model_dump() for chart in structured.charts] if structured else [],
         "queries": [_query_record(record) for record in result.queries],
         "issues": asdict(result.issues),
         "as_of": str(result.as_of),

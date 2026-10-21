@@ -43,6 +43,7 @@ indexes roughly double the file size, to about 100 MB.
 .venv/bin/python main.py "How many diabetic patients had an ER visit?"
 .venv/bin/python main.py --verbose "Compare ER visits for diabetic and other patients over the last year"
 .venv/bin/python main.py --no-sql "Which age band has the most hospital visits?"
+.venv/bin/python main.py --report visits.html "Show hospital visits by month"
 ```
 
 The agent plans, runs read-only SQL, checks what it gets back, and explains the answer.
@@ -55,7 +56,25 @@ never ran or a window no query filtered on, is printed under "Traceability warni
 
 The SQL shown is recorded as each query runs, so it is what actually executed rather than
 what the model says it ran. Add `--verbose` to watch each step as it happens, `--json` to
-get the whole run as JSON, and `--no-sql` to hide the queries.
+get the whole run as JSON, `--no-sql` to hide the queries, and `--report FILE` to also
+write the answer as a self-contained HTML report.
+
+### Statistics and charts
+
+For statistics the agent has three tools beside `run_sql`. Each runs its own read-only
+SELECT through the same guardrails, may read up to 100,000 rows, and returns only the table
+it computed, which is numbered and cited like any query:
+
+| Tool | Computes |
+|---|---|
+| `summarize` | Count, mean, standard deviation, quartiles, median and range of a value, overall or per group |
+| `trend` | A count, sum or mean per month, quarter or year, and its direction by a Mann-Kendall test. Periods the data only partly covers, such as the month holding the as-of date, are shown but left out of the verdict |
+| `compare_groups` | Each group's rate with a 95% Wilson interval, or its mean; two groups are tested with Fisher's exact test or a permutation test |
+
+An answer may ask for up to three bar or line charts. Each names a query and its columns,
+and the values are read from that query's recorded rows, so a chart can only show numbers
+that came out of SQL that ran. The design is in
+[Documents/analytics-and-reports.md](../Documents/analytics-and-reports.md).
 
 Every run is appended to `logs/runs.jsonl`, which is git-ignored. The log holds the
 question, the answer, every query and what the run cost, and it is the raw material for the
@@ -85,11 +104,14 @@ curl -s -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \
 | GET | `/api/conversations/{id}` | One conversation: every question with its answer and steps as first sent, and whether it is still answering. |
 | PATCH | `/api/conversations/{id}` | Rename it, with `{"title": "..."}` of 1 to 100 characters. |
 | DELETE | `/api/conversations/{id}` | Delete it and its answers. A conversation still answering gets a 409. |
+| GET | `/api/conversations/{id}/turns/{turn}/report` | One stored answer as a self-contained HTML report, as a download. |
 
 The answer carries the same parts the command line prints, filled in from our own records:
 each definition's status comes from the semantic layer, and the window dates are computed
 here. Each query comes with the rows it returned, capped at the row limit, so the interface
-can show the evidence. The rows are not written to the run log.
+can show the evidence; an analysis comes with the table it computed and what it found.
+Charts come with their values, read from the query each one cites. The rows are not
+written to the run log.
 
 Every answer belongs to a conversation. Send the `conversation_id` from one answer with the
 next question, and a follow-up such as "what about heart disease?" is understood. The agent
@@ -243,6 +265,7 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `SQL_AGENT_DB_PATH` | `synthea.db` | Database path. Relative paths resolve against `Backend`. |
 | `SQL_AGENT_CSV_DIR` | `data/synthea` | Source CSV folder read by the loader. |
 | `SQL_AGENT_MAX_ROWS` | `200` | Largest number of rows one agent query may return. |
+| `SQL_AGENT_ANALYSIS_MAX_ROWS` | `100000` | Rows an analytics tool may read. Only its computed table reaches the model. |
 | `SQL_AGENT_QUERY_TIMEOUT` | `15` | Seconds before a query is stopped. |
 | `SQL_AGENT_LOG_PATH` | `logs/runs.jsonl` | Where runs are logged. `off` disables logging. |
 | `SQL_AGENT_AS_OF_DATE` | `latest` | Anchor for "last N months": `latest`, `today` or `YYYY-MM-DD`. |
@@ -271,6 +294,10 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/requestlog.py` | Logs each HTTP request. |
 | `sql_agent/agent.py` | The agent loop, and the reusable core a web service will call. |
 | `sql_agent/answer.py` | The shape of an answer, its rendering and its self-checks. |
+| `sql_agent/analytics.py` | The statistics behind the analytics tools, with no database or model code. |
+| `sql_agent/charts.py` | Resolves an answer's charts from the run, and draws them as SVG for reports. |
+| `sql_agent/payload.py` | The answer as the service sends, stores and reports it. |
+| `sql_agent/report.py` | One answer as a self-contained HTML report. |
 | `sql_agent/runlog.py` | Appends each run to the log. |
 | `sql_agent/evaluate.py` | Scores the agent against known answers. |
 | `sql_agent/check_security.py` | The attack catalogue and its runner. |

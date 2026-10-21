@@ -79,6 +79,24 @@ def test_row_cap_does_not_override_a_smaller_limit(sample_db_path):
     assert not result.truncated
 
 
+def test_a_larger_cap_can_be_asked_for_one_statement(sample_db_path):
+    db = ReadOnlyDatabase(sample_db_path, max_rows=2, timeout_seconds=5)
+    result = db.run_query("SELECT id FROM encounters", max_rows=10)
+    assert result.row_count == 3
+    assert not result.truncated
+    assert db.run_query("SELECT id FROM encounters", max_rows=1).truncated
+    assert db.run_query("SELECT id FROM encounters").row_count == 2
+
+
+def test_a_larger_cap_changes_nothing_else(sample_db_path):
+    """The analysis path is the same path: validation and the authorizer still apply."""
+    db = ReadOnlyDatabase(sample_db_path, max_rows=2, timeout_seconds=5)
+    with pytest.raises(UnsafeQueryError):
+        db.run_query("DELETE FROM encounters", max_rows=1_000)
+    with pytest.raises(BlockedColumnError):
+        db.run_query("SELECT ssn FROM patients", max_rows=1_000)
+
+
 def test_sql_mistakes_return_a_correctable_error(db):
     with pytest.raises(QueryExecutionError, match="no such column"):
         db.run_query("SELECT nope FROM patients")

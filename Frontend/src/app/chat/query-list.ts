@@ -87,6 +87,10 @@ export class QueryList {
   }
 
   protected summary(query: QueryRecord): string {
+    if (query.analysis) {
+      const time = query.elapsed_ms === null ? '' : ` in ${Math.round(query.elapsed_ms)} ms`;
+      return `computed a ${query.analysis.label}${time}`;
+    }
     const rows = query.row_count ?? 0;
     const parts = [`${rows} ${rows === 1 ? 'row' : 'rows'}`];
     if (query.elapsed_ms !== null) {

@@ -170,4 +170,31 @@ describe('AgentApi', () => {
       kind: 'unknown_conversation',
     });
   });
+
+  it('fetches a report as text, with the token', async () => {
+    const id = 'c'.repeat(32);
+    const { api, fetchSpy } = setup(
+      async () =>
+        new Response('<!doctype html><title>r</title>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        }),
+    );
+    api.token.set('the-shared-token');
+    expect(await api.report(id, 2)).toBe('<!doctype html><title>r</title>');
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect([init.method, url]).toEqual(['GET', `/api/conversations/${id}/turns/2/report`]);
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer the-shared-token');
+  });
+
+  it('reports why a report was refused', async () => {
+    const { api } = setup(async () =>
+      jsonResponse({ error: 'unknown_turn', message: 'No such question.' }, 404),
+    );
+    await expect(api.report('c'.repeat(32), 9)).rejects.toMatchObject({
+      status: 404,
+      kind: 'unknown_turn',
+      message: 'No such question.',
+    });
+  });
 });

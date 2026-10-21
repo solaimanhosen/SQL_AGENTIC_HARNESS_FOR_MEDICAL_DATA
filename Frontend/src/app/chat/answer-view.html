@@ -32,6 +32,10 @@
       </section>
     }
 
+    @for (chart of item.charts ?? []; track $index) {
+      <app-chart-view [chart]="chart" (source)="showQuery($event)" />
+    }
+
     <dl class="facts">
       <div>
         <dt>Time window</dt>
@@ -117,6 +121,9 @@
         @for (statement of item.issues.unsupported_findings; track $index) {
           <li>No query cited for: {{ statement }}</li>
         }
+        @for (problem of item.issues.chart_problems ?? []; track $index) {
+          <li>Chart not drawn, {{ problem }}</li>
+        }
       </ul>
     </section>
   }
@@ -132,6 +139,14 @@
 
   <div class="foot">
     <p class="meta">{{ meta() }}</p>
-    <button type="button" class="tool" (click)="downloadJson()">Download answer (JSON)</button>
+    <div class="downloads">
+      <button type="button" class="tool" [disabled]="reporting()" (click)="downloadReport()">
+        {{ reporting() ? 'Making the report…' : 'Download report (HTML)' }}
+      </button>
+      <button type="button" class="tool" (click)="downloadJson()">Download answer (JSON)</button>
+    </div>
   </div>
+  @if (reportError(); as message) {
+    <p class="report-error" role="alert">{{ message }}</p>
+  }
 </div>

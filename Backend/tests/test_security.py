@@ -2,7 +2,7 @@
 
 import pytest
 
-from sql_agent.check_security import ATTACKS, run_attacks
+from sql_agent.check_security import ATTACKS, TOOL_ATTACKS, run_attacks, run_tool_attacks
 from sql_agent.config import load_settings
 from sql_agent.db import BlockedColumnError, ReadOnlyDatabase
 from sql_agent.sql_guard import MAX_QUERY_CHARS, UnsafeQueryError
@@ -30,6 +30,33 @@ def test_every_attack_behaves_as_expected(outcomes):
         if not outcome.as_expected
     ]
     assert not unexpected, unexpected
+
+
+def test_every_attack_behaves_the_same_with_the_analysis_row_cap(db):
+    unexpected = [outcome.attack.id for outcome in run_attacks(db, analysis=True) if not outcome.as_expected]
+    assert not unexpected, unexpected
+
+
+@pytest.fixture(scope="module")
+def tool_outcomes(db):
+    return {outcome.attack.id: outcome for outcome in run_tool_attacks(db)}
+
+
+def test_every_attack_through_the_analytics_tools_behaves_as_expected(tool_outcomes):
+    unexpected = {
+        name: outcome.detail for name, outcome in tool_outcomes.items() if not outcome.as_expected
+    }
+    assert not unexpected, unexpected
+    assert {attack.id for attack in TOOL_ATTACKS} == set(tool_outcomes)
+
+
+def test_identity_columns_cannot_be_analysed(tool_outcomes):
+    for name in ("analysis_identity_value", "analysis_identity_group", "analysis_identity_hidden"):
+        assert tool_outcomes[name].detail.startswith("BlockedColumnError"), name
+
+
+def test_an_analysis_too_big_to_read_whole_is_refused_by_the_cap(tool_outcomes):
+    assert "more than 100,000 rows" in tool_outcomes["analysis_partial_data"].detail
 
 
 def test_the_catalogue_covers_the_main_categories():

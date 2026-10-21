@@ -1,8 +1,8 @@
 # Security review
 
 This document records what the agent is protected against, how each protection is proven,
-and what remains a risk. It covers the backend and its HTTP service as they stand, running
-against a synthetic database.
+and what remains a risk. It covers the backend, its HTTP service, the analytics tools and
+the HTML reports as they stand, running against a synthetic database.
 
 ```bash
 cd Backend
@@ -47,13 +47,18 @@ Four inputs are assumed hostile, whatever they look like:
 | Anyone who can reach the service using it | With `SQL_AGENT_API_TOKEN` set, every endpoint except health requires it as a bearer token, compared in constant time. Without a token the service refuses to listen beyond this machine | Tests for a missing, wrong and unprefixed token on every protected endpoint, and for the refusal to bind without one |
 | Cost as a denial of service | Before a question reaches the model: a limit on questions running at once, a token budget per UTC day, and a token budget per conversation. Runs still in progress hold a reservation, so a burst cannot overspend, and a run whose reader left still counts | Unit tests of the ledger, and service tests showing each limit refuses with a 429 before the model is called |
 | Oversized requests | Bodies over 16 KB are refused whether or not they declare their length, and a question is capped at 2,000 characters | Tests for a declared and an undeclared oversized body |
+| Statistics that read past the row cap | The analytics tools take their own SQL and may read up to `SQL_AGENT_ANALYSIS_MAX_ROWS` rows (100,000 by default), but through the same `run_query`: the same validator, authorizer, read-only connection, time limit and engine limits. Only the computed table reaches the model. A result over the cap is refused, never computed on in part | Every catalogue attack run a second time with the analysis cap, and eight more through the tools themselves, including identity columns named as the value or the group |
+| A statistic or a chart the model made up | Statistics are computed by our code with SciPy. A chart names a query and its columns, and the plotted values are read from that query's recorded rows; one that cannot be resolved is not drawn and becomes a traceability warning | Unit tests of each analysis against values worked out by hand, of chart resolution and of every refusal; two chart checks in the evaluation |
+| Hostile text in a report or a chart | Every value in a report is escaped, including inside SVG. A report has no script and no external reference, and a Content-Security-Policy, in the file and on the response, forbids loading anything. The interface draws charts with template bindings, so labels are text | Tests that a row holding `<script>`, `</style>` or `<svg onload>` stays text, that a report holds no script and no external reference, and that a chart's labels stay text |
 | Untraceable use of the service | One line per request in `logs/requests.jsonl`: path, status, time, client address, whether it was authenticated and why it was refused. No bodies and no token | A test that a refusal is logged and the token never appears |
 
 ## Results
 
-The catalogue holds 35 cases: 32 attacks that must be blocked and 3 ordinary queries that
-must keep working, so that over-blocking shows up as a failure too. All 35 behave as
-expected, and the row counts of every table are identical before and after the run.
+The catalogue holds 35 statements: 32 attacks that must be blocked and 3 ordinary queries
+that must keep working, so that over-blocking shows up as a failure too. Since Phase C each
+runs twice, as `run_sql` runs it and with the analysis row cap, and 8 more cases go through
+the analytics tools: 6 attacks and 2 ordinary analyses. All 78 behave as expected, and the
+row counts of every table are identical before and after the run.
 
 Three weaknesses were found while writing this review, and all three are now fixed:
 
@@ -106,6 +111,16 @@ a sign the source text had been tampered with.
 - **Everyone holding the token sees every conversation.** There are no accounts, so the
   list is shared, and anyone with the token can read, rename or delete any conversation.
   The `owner` column is in place for when accounts exist.
+- **A downloaded report is a copy of the evidence.** It holds the SQL and the rows each
+  query returned, and once saved it can be emailed or uploaded like any file. With real
+  data, a report needs the handling of a query extract. Setting
+  `SQL_AGENT_STORE_RESULT_ROWS=false` leaves rows out of stored answers, and so out of
+  their reports.
+- **An analysis reads more rows into memory.** Up to 100,000 rows per call, with the same
+  time limit as any query. With four questions at once that is bounded, but it is more
+  memory than `run_sql` uses. Lower the cap if the host is small.
+- **Small groups are flagged, not suppressed.** `compare_groups` and `summarize` name any
+  group under 20, but still report it. A minimum group size is still a decision to make.
 - **The budget is counted in tokens, not money.** The figures in the evaluation give the
   cost of a typical question. Set the daily budget with the model's current price in mind.
 - **Browser storage of the token is the interface's problem.** The web interface will need
@@ -116,6 +131,7 @@ a sign the source text had been tampered with.
 1. Settle where the model runs and whether patient data may be sent to it.
 2. Re-run the catalogue against the real database, since the blocked-column list is
    specific to the tables it names.
-3. Decide on a minimum group size for reported results.
+3. Decide on a minimum group size for reported results, for answers, analyses and reports
+   alike, and whether reports may carry rows at all.
 4. Replace the shared token with real accounts, serve over HTTPS, and review the daily
    budget against the model's price.

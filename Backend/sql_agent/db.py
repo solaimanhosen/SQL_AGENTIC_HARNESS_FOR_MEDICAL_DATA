@@ -26,6 +26,7 @@ from .config import Settings
 from .sql_guard import UnsafeQueryError, validate_query
 
 DEFAULT_MAX_ROWS = 200
+DEFAULT_ANALYSIS_MAX_ROWS = 100_000
 DEFAULT_TIMEOUT_SECONDS = 15.0
 
 # Columns the agent may never read, by table.
@@ -108,9 +109,11 @@ class ReadOnlyDatabase:
         max_rows: int = DEFAULT_MAX_ROWS,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         blocked_columns: dict[str, frozenset[str]] | None = None,
+        analysis_max_rows: int = DEFAULT_ANALYSIS_MAX_ROWS,
     ) -> None:
         self.db_path = Path(db_path)
         self.max_rows = max_rows
+        self.analysis_max_rows = analysis_max_rows
         self.timeout_seconds = timeout_seconds
         self.blocked_columns = BLOCKED_COLUMNS if blocked_columns is None else blocked_columns
 
@@ -120,22 +123,28 @@ class ReadOnlyDatabase:
             settings.db_path,
             max_rows=settings.max_rows,
             timeout_seconds=settings.query_timeout_seconds,
+            analysis_max_rows=settings.analysis_max_rows,
         )
 
     def blocked_columns_for(self, table: str) -> frozenset[str]:
         return self.blocked_columns.get(table.lower(), frozenset())
 
-    def run_query(self, sql: str) -> QueryResult:
+    def run_query(self, sql: str, *, max_rows: int | None = None) -> QueryResult:
         """Validate and run a single SELECT, returning at most `max_rows` rows.
+
+        An analytics tool passes a larger `max_rows`, because only the table it computes
+        reaches the model. Nothing else changes: the same validation, authorizer, read-only
+        connection, time limit and engine limits apply to every statement.
 
         Raises UnsafeQueryError if the statement is not a read, BlockedColumnError if it
         reads a blocked column, QueryTimeoutError on the time limit, and
         QueryExecutionError for ordinary SQL mistakes the caller can correct.
         """
         validated = validate_query(sql)
+        limit = self.max_rows if max_rows is None else max_rows
         # The cap is applied by wrapping rather than by editing the statement, so a query
         # that already has its own LIMIT keeps it. One extra row reveals truncation.
-        capped = f"SELECT * FROM (\n{validated.sql}\n) LIMIT {self.max_rows + 1}"
+        capped = f"SELECT * FROM (\n{validated.sql}\n) LIMIT {limit + 1}"
 
         started = time.perf_counter()
         with self._connect(trusted=False, deadline=time.monotonic() + self.timeout_seconds) as conn:
@@ -157,8 +166,8 @@ class ReadOnlyDatabase:
         return QueryResult(
             sql=validated.sql,
             columns=columns,
-            rows=tuple(rows[: self.max_rows]),
-            truncated=len(rows) > self.max_rows,
+            rows=tuple(rows[:limit]),
+            truncated=len(rows) > limit,
             elapsed_ms=elapsed_ms,
             tables=validated.tables,
         )

@@ -22,6 +22,13 @@
           }
         </p>
         <pre><code>{{ query.sql }}</code></pre>
+        @if (query.analysis; as analysis) {
+          <ul class="analysis" aria-label="What the service computed">
+            @for (line of analysis.summary; track $index) {
+              <li>{{ line }}</li>
+            }
+          </ul>
+        }
         <div class="tools">
           <button type="button" class="tool" (click)="copySql(query)" aria-live="polite">
             {{ copyLabel(query) }}

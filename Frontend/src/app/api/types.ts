@@ -22,6 +22,17 @@ export interface TimeWindow {
   description: string;
 }
 
+/** What an analytics tool computed. Every figure in it was computed by the service. */
+export interface AnalysisInfo {
+  tool: 'summarize' | 'trend' | 'compare_groups';
+  /** A short description, such as "trend by month over 5,571 rows". */
+  label: string;
+  parameters: Record<string, unknown>;
+  /** Rows the SQL returned. The query's own rows are the table computed from them. */
+  source_rows: number;
+  summary: string[];
+}
+
 export interface QueryRecord {
   number: number | null;
   sql: string;
@@ -32,6 +43,25 @@ export interface QueryRecord {
   error: string | null;
   columns: string[];
   rows: unknown[][];
+  /** Set when an analytics tool produced this result. Older stored answers lack it. */
+  analysis?: AnalysisInfo | null;
+}
+
+export interface ChartSeries {
+  name: string;
+  /** One value per category, in the order of the chart's x. Null is a gap. */
+  values: (number | null)[];
+}
+
+/** A chart drawn from one query's rows. Only the title was written by the model. */
+export interface Chart {
+  kind: 'bar' | 'line';
+  title: string;
+  query_number: number;
+  x_label: string;
+  y_label: string;
+  x: string[];
+  series: ChartSeries[];
 }
 
 export interface AnswerIssues {
@@ -40,6 +70,8 @@ export interface AnswerIssues {
   missing_query_numbers: number[];
   unsupported_findings: string[];
   window_not_in_sql: string | null;
+  /** Charts that could not be drawn from the run. Older stored answers lack it. */
+  chart_problems?: string[];
 }
 
 export interface Answer {
@@ -56,6 +88,8 @@ export interface Answer {
   caveats: string[];
   queries: QueryRecord[];
   issues: AnswerIssues;
+  /** Older stored answers lack it. */
+  charts?: Chart[];
   as_of: string;
   model: string;
   elapsed_s: number;
@@ -71,7 +105,8 @@ export interface Health {
   as_of: string;
 }
 
-export type StepKind = 'sql' | 'sql_result' | 'sql_error' | 'describe_table' | 'lookup_definition';
+export type StepKind =
+  'sql' | 'sql_result' | 'sql_error' | 'analysis' | 'describe_table' | 'lookup_definition';
 
 export interface Step {
   kind: StepKind;

@@ -8,14 +8,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sql_agent.agent import AgentError, AgentResult
-from sql_agent.answer import AnswerIssues, Draft, Finding, StructuredAnswer, TimeWindow
+from sql_agent.answer import AnswerIssues, ChartRequest, Draft, Finding, StructuredAnswer, TimeWindow
+from sql_agent.charts import resolve_charts
 from sql_agent.config import load_settings
 from sql_agent.conversations import ConversationStore
 from sql_agent.limits import SpendingLimits
 from sql_agent.db import ReadOnlyDatabase
 from sql_agent.semantic import load_semantic_layer
+from sql_agent.payload import answer_payload
 from sql_agent.service import MAX_QUESTION_CHARS, create_app
-from sql_agent.tools import QueryRecord
+from sql_agent.tools import AnalysisInfo, QueryRecord
 
 AS_OF = date(2026, 8, 16)
 
@@ -554,6 +556,73 @@ def test_a_stored_conversation_is_returned_with_every_answer_as_it_was_sent(sett
     assert body["history"][0]["answer"]["definitions_used"][0]["status"] == "assumed"
 
 
+def test_an_analysis_is_sent_with_its_label_settings_and_summary(settings, db):
+    info = AnalysisInfo(
+        tool="trend",
+        parameters={"date_column": "start", "period": "month", "measure": "count", "value_column": None, "start": None},
+        source_rows=545,
+        summary=("No clear trend.",),
+    )
+    record = QueryRecord(
+        sql="SELECT start FROM encounters", number=1, row_count=1, columns=("period", "count", "complete"),
+        rows=(("2026-07", 36, "yes"),), analysis=info,
+    )
+    result = dataclasses.replace(_result("q"), queries=(record,))
+    body = answer_payload(result, load_semantic_layer(), conversation_id="c" * 32, turn=1).model_dump(mode="json")
+    assert body["queries"][0]["analysis"] == {
+        "tool": "trend",
+        "label": "trend by month over 545 rows",
+        "parameters": info.parameters,
+        "source_rows": 545,
+        "summary": ["No clear trend."],
+    }
+    assert body["queries"][0]["rows"] == [["2026-07", 36, "yes"]]
+
+
+def test_charts_are_sent_with_values_from_the_run(settings, db):
+    structured = StructuredAnswer(
+        headline="h",
+        charts=[ChartRequest(query_number=1, kind="bar", x="n", y=["n"], title="Count")],
+    )
+    result = _result("q")
+    charts, problems = resolve_charts(structured.charts, result.queries)
+    result = dataclasses.replace(result, structured=structured, charts=charts)
+    body = answer_payload(result, load_semantic_layer(), conversation_id="c" * 32, turn=1).model_dump(mode="json")
+    assert problems == ()
+    assert body["charts"] == [
+        {
+            "kind": "bar",
+            "title": "Count",
+            "query_number": 1,
+            "x_label": "n",
+            "y_label": "n",
+            "x": ["8"],
+            "series": [{"name": "n", "values": [8]}],
+        }
+    ]
+
+
+def test_an_answer_stored_before_analytics_existed_still_opens(settings, db, tmp_path):
+    settings = dataclasses.replace(settings, conversations_path=tmp_path / "conversations.db")
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    store = ConversationStore(settings.conversations_path)
+    (answer_json,) = store._db.execute("SELECT answer_json FROM turns").fetchone()
+    old = json.loads(answer_json)
+    for query in old["queries"]:
+        del query["analysis"]
+    del old["charts"], old["issues"]["chart_problems"]
+    store._db.execute("UPDATE turns SET answer_json = ?", (json.dumps(old),))
+    store._db.commit()
+
+    reopened, _ = _client(settings, db)
+    response = reopened.get(f"/api/conversations/{conversation_id}")
+    assert response.status_code == 200
+    answer = response.json()["history"][0]["answer"]
+    assert answer["queries"][0]["analysis"] is None
+    assert answer["charts"] == [] and answer["issues"]["chart_problems"] == []
+
+
 def test_a_conversation_can_be_renamed_and_deleted(settings, db):
     client, agent = _client(settings, db)
     conversation_id = _ask(client)["conversation_id"]
@@ -601,3 +670,43 @@ def test_the_browser_may_rename_and_delete_from_the_configured_origin(settings, 
             headers={"Origin": "http://localhost:4200", "Access-Control-Request-Method": method},
         )
         assert response.status_code == 200 and method in response.headers["access-control-allow-methods"]
+
+
+def test_a_stored_answer_downloads_as_a_self_contained_report(settings, db):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    response = client.get(f"/api/conversations/{conversation_id}/turns/1/report")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    assert response.headers["content-disposition"] == f'attachment; filename="{conversation_id[:8]}-turn1-report.html"'
+    assert response.headers["content-security-policy"] == "default-src 'none'; style-src 'unsafe-inline'"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "<h1>How many have diabetes?</h1>" in response.text
+    assert "Eight patients have diabetes." in response.text
+    assert "A follow-up." not in response.text
+
+
+def test_a_follow_ups_report_names_the_questions_before_it(settings, db):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    _ask(client, "And heart disease?", conversation_id)
+    html = client.get(f"/api/conversations/{conversation_id}/turns/2/report").text
+    assert "<h1>And heart disease?</h1>" in html
+    assert "<li>How many have diabetes?</li>" in html
+
+
+def test_a_report_for_a_question_that_was_not_answered_is_refused(settings, db):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    missing = client.get(f"/api/conversations/{conversation_id}/turns/2/report")
+    assert missing.status_code == 404 and missing.json()["error"] == "unknown_turn"
+    assert client.get(f"/api/conversations/{conversation_id}/turns/0/report").status_code == 422
+    assert client.get(f"/api/conversations/{'f' * 32}/turns/1/report").json()["error"] == "unknown_conversation"
+
+
+def test_a_report_requires_the_token(settings, db):
+    client, _ = _client(settings, db, api_token=TOKEN)
+    conversation_id = _ask(client, headers=AUTH)["conversation_id"]
+    path = f"/api/conversations/{conversation_id}/turns/1/report"
+    assert client.get(path).status_code == 401
+    assert client.get(path, headers=AUTH).status_code == 200

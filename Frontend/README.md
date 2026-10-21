@@ -50,7 +50,9 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/sidebar-layout.ts` | The sidebar's width limits, and remembering its width and collapsed state in local storage. |
 | `src/app/chat/exchange-view.*` | One question and what became of it: the live steps, the answer as a draft while it is written, then the checked answer or the failure. |
 | `src/app/chat/answer-view.*` | The answer and everything behind it: findings with clickable query citations, time window, definitions with their status, assumptions, caveats, traceability warnings, and what the run cost. |
-| `src/app/chat/query-list.*` | The SQL that ran, numbered as the findings cite it, with failed attempts kept apart. |
+| `src/app/chat/query-list.*` | The SQL that ran, numbered as the findings cite it, with failed attempts kept apart. An analysis is labelled with what was computed and what it found. |
+| `src/app/chat/chart-view.*` | One chart as SVG: bars or lines, a legend for several series, and a readout from the pointer or the arrow keys. Its "Query N" button opens the query it was drawn from. |
+| `src/app/chat/chart-scale.ts` | A chart's geometry: value range, round ticks, bar and line positions, label thinning. The report's charts in the backend follow the same rules. |
 | `src/app/chat/result-table.ts` | The rows one query returned. |
 | `src/app/chat/export.ts` | CSV and JSON building, file names, and the download and clipboard helpers. |
 | `src/app/chat/step-log.ts` | Every step the agent took, with the SQL of each query, live and afterwards. |
@@ -64,6 +66,7 @@ Everything the command line prints is on the page, and nothing more exact than t
 sent:
 
 - the headline and findings, where each "Query N" opens the SQL panel at that query;
+- any charts, with values the service read from the query each one cites;
 - the time window with its dates, and the as-of date;
 - each definition with its status: confirmed, assumed, or not a shared definition;
 - assumptions and caveats;
@@ -81,10 +84,13 @@ sent:
   text is untrusted.
 - **Download answer (JSON).** The whole answer as the service sent it: findings,
   definitions, warnings, SQL and rows.
+- **Download report (HTML).** The answer as one self-contained file, with its charts,
+  definitions, SQL and rows, which opens with no network. The service makes it from the
+  stored answer.
 
 Files are named after the conversation and the question, such as
-`5d6b7095-turn1-query1.csv`. They are built in the browser, so nothing extra is sent
-anywhere.
+`5d6b7095-turn1-query1.csv`. The CSV and JSON files are built in the browser, so nothing
+extra is sent anywhere; the report is fetched from the service.
 
 ## Rules worth keeping
 

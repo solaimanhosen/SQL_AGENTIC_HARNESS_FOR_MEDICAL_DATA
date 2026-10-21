@@ -1,7 +1,52 @@
 # Changelog
 
 Notable changes to this project, newest first. Versions follow the project milestones:
-v1 is the backend, v2 adds the web interface.
+v1 is the backend, v2 adds the web interface, v3 adds analytics, charts and reports.
+
+## v3.0.0 — 21 October 2026
+
+The agent computes statistics, answers carry charts, and any answer downloads as a
+self-contained HTML report. The design and the reasons behind it are in
+`Documents/analytics-and-reports.md` and decision record 0004.
+
+### Added
+
+- Three analytics tools the agent can call. Each runs its own read-only SQL through the
+  same safety layers, may read up to 100,000 rows, and returns only the table it computed,
+  numbered and cited like any query:
+  - `summarize`: count, mean, standard deviation, quartiles, median and range, overall
+    or per group;
+  - `trend`: a count, sum or mean per month, quarter or year, with its direction judged
+    by a Mann-Kendall test and its size by Sen's slope. Periods the data covers only in
+    part, such as the month holding the as-of date, are shown but left out of the verdict;
+  - `compare_groups`: rates with 95% Wilson intervals, or means, with Fisher's exact test
+    or a seeded permutation test between two groups. Groups under 20 are flagged.
+- Charts. An answer may ask for up to three bar or line charts, each naming a query and its
+  columns. The values are read from that query's recorded rows, and a chart that cannot be
+  resolved is not drawn and becomes a traceability warning.
+- Charts in the interface, drawn as SVG with eight colour-blind-checked series colours, a
+  legend for several series, and a readout from the pointer or the keyboard. Each chart
+  opens the query it was drawn from. The query list labels an analysis and lists what it
+  found.
+- Self-contained HTML reports, one per answer: the narrative, the charts, the definitions
+  and their status, and every query with its SQL and rows. No script, no external
+  reference, and a Content-Security-Policy that forbids loading anything. Download one
+  under any answer, from `GET /api/conversations/{id}/turns/{turn}/report`, or with
+  `main.py --report FILE`.
+- The setting `SQL_AGENT_ANALYSIS_MAX_ROWS`.
+- Three analytics questions in the evaluation, and checks that an analysis ran and a chart
+  was drawn.
+- The attack catalogue runs every statement again with the analysis row cap, plus eight
+  cases through the analytics tools: 78 in all.
+
+### Changed
+
+- The agent is told to use the analytics tools for statistics, to state their verdicts as
+  given, and to add a chart to every trend and comparison.
+- The answer models moved from `service.py` to `payload.py`.
+- SciPy is a new dependency.
+- Each model call carries about 1,550 more input tokens of instructions and tool
+  descriptions.
 
 ## v2.1.0 — unreleased
 

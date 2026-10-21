@@ -9,6 +9,8 @@ export function describeStep(step: Step): string {
       return `Query finished: ${step.detail}`;
     case 'sql_error':
       return 'A query failed, so the agent is correcting it';
+    case 'analysis':
+      return `Computed a ${step.detail}`;
     case 'describe_table':
       return `Reading how ${step.detail} is structured`;
     case 'lookup_definition':
@@ -18,7 +20,7 @@ export function describeStep(step: Step): string {
   }
 }
 
-/** How many queries have finished so far. */
+/** How many queries have finished so far, analyses included. */
 export function queriesRun(steps: Step[]): number {
-  return steps.filter((step) => step.kind === 'sql_result').length;
+  return steps.filter((step) => step.kind === 'sql_result' || step.kind === 'analysis').length;
 }

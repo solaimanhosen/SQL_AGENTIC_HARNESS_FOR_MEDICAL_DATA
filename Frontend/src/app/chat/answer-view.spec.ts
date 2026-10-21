@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 
+import { AgentApi, ApiError } from '../api/agent-api';
 import { Answer, QueryRecord, Step } from '../api/types';
 import { answerFixture } from '../testing/fixtures';
 import { AnswerView } from './answer-view';
@@ -21,12 +22,22 @@ function fakeExporter(copies = true) {
   return { save: vi.fn(), saveCsv: vi.fn(), copy: vi.fn(async () => copies) };
 }
 
+function fakeApi(report: () => Promise<string> = async () => '<!doctype html><p>report</p>') {
+  return { report: vi.fn(report) };
+}
+
 async function render(
   overrides: Partial<Answer> = {},
   steps: Step[] = [],
   exporter = fakeExporter(),
+  api = fakeApi(),
 ) {
-  TestBed.configureTestingModule({ providers: [{ provide: Exporter, useValue: exporter }] });
+  TestBed.configureTestingModule({
+    providers: [
+      { provide: Exporter, useValue: exporter },
+      { provide: AgentApi, useValue: api },
+    ],
+  });
   const fixture = TestBed.createComponent(AnswerView);
   fixture.componentRef.setInput('answer', answerFixture(overrides));
   fixture.componentRef.setInput('steps', steps);
@@ -36,6 +47,16 @@ async function render(
 
 function text(element: Element | null): string {
   return (element?.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function button(element: HTMLElement, label: string): HTMLButtonElement {
+  const found = [...element.querySelectorAll<HTMLButtonElement>('button')].find(
+    (each) => text(each) === label,
+  );
+  if (!found) {
+    throw new Error(`No button labelled ${label}`);
+  }
+  return found;
 }
 
 describe('AnswerView', () => {
@@ -287,7 +308,7 @@ describe('AnswerView', () => {
   it('downloads the whole answer as JSON', async () => {
     const exporter = fakeExporter();
     const { element } = await render({}, [], exporter);
-    (element.querySelector('.foot .tool') as HTMLButtonElement).click();
+    button(element, 'Download answer (JSON)').click();
     const [name, body, type] = exporter.save.mock.calls[0];
     expect(name).toBe('cccccccc-turn1-answer.json');
     expect(type).toBe('application/json');
@@ -298,5 +319,128 @@ describe('AnswerView', () => {
     const { element } = await render({ queries: [FAILED] });
     expect(element.querySelector('app-result-table')).toBeNull();
     expect(element.querySelector('.attempts .tool')).toBeNull();
+  });
+  it('draws each chart, and its source button opens the query it was drawn from', async () => {
+    const trend: QueryRecord = {
+      ...answerFixture().queries[0],
+      number: 2,
+      sql: 'SELECT start FROM encounters',
+      row_count: 2,
+      columns: ['period', 'count', 'complete'],
+      rows: [
+        ['2026-07', 36, 'yes'],
+        ['2026-08', 22, 'no'],
+      ],
+    };
+    const { fixture, element } = await render({
+      queries: [answerFixture().queries[0], trend],
+      charts: [
+        {
+          kind: 'line',
+          title: 'Visits by month',
+          query_number: 2,
+          x_label: 'period',
+          y_label: 'count',
+          x: ['2026-07', '2026-08'],
+          series: [{ name: 'count', values: [36, 22] }],
+        },
+      ],
+    });
+    expect([...element.querySelectorAll('app-chart-view .title')].map(text)).toEqual([
+      'Visits by month',
+    ]);
+
+    element.querySelector<HTMLButtonElement>('app-chart-view .cite')!.click();
+    await fixture.whenStable();
+    const panel = element.querySelector('app-query-list details') as HTMLDetailsElement;
+    expect(panel.open).toBe(true);
+    expect(panel.querySelector('.query.lit')?.getAttribute('data-query')).toBe('2');
+  });
+
+  it('draws no chart for an answer stored before charts existed', async () => {
+    const { element } = await render({ charts: undefined });
+    expect(element.querySelector('app-chart-view')).toBeNull();
+  });
+
+  it('says which charts could not be drawn from the run', async () => {
+    const { element } = await render({
+      issues: {
+        any: true,
+        unknown_definitions: [],
+        missing_query_numbers: [],
+        unsupported_findings: [],
+        window_not_in_sql: null,
+        chart_problems: ["chart 'Ghost': query 9 did not run"],
+      },
+    });
+    expect([...element.querySelectorAll('.warning li')].map(text)).toEqual([
+      "Chart not drawn, chart 'Ghost': query 9 did not run",
+    ]);
+  });
+
+  it('labels an analysis with what was computed and says what it found', async () => {
+    const analysed: QueryRecord = {
+      ...answerFixture().queries[0],
+      sql: 'SELECT start FROM encounters',
+      row_count: 2,
+      elapsed_ms: 8,
+      columns: ['period', 'count', 'complete'],
+      rows: [
+        ['2026-07', 36, 'yes'],
+        ['2026-08', 22, 'no'],
+      ],
+      analysis: {
+        tool: 'trend',
+        label: 'trend by month over 58 rows',
+        parameters: { period: 'month' },
+        source_rows: 58,
+        summary: [
+          'Incomplete, so shown but not used for the direction: 2026-08.',
+          'Only 1 complete months.',
+        ],
+      },
+    };
+    const { fixture, element } = await render({ queries: [analysed] });
+    const panel = element.querySelector('app-query-list details') as HTMLDetailsElement;
+    panel.open = true;
+    panel.dispatchEvent(new Event('toggle'));
+    await fixture.whenStable();
+    expect(text(panel.querySelector('.query .head'))).toBe(
+      'Query 1 · computed a trend by month over 58 rows in 8 ms',
+    );
+    expect([...panel.querySelectorAll('.analysis li')].map(text)).toEqual(
+      analysed.analysis!.summary,
+    );
+    expect(panel.querySelectorAll('app-result-table tbody tr').length).toBe(2);
+  });
+
+  it('downloads the report the service makes for this answer', async () => {
+    const exporter = fakeExporter();
+    const api = fakeApi();
+    const { fixture, element } = await render({ turn: 3 }, [], exporter, api);
+    button(element, 'Download report (HTML)').click();
+    await fixture.whenStable();
+    expect(api.report).toHaveBeenCalledWith('c'.repeat(32), 3);
+    expect(exporter.save).toHaveBeenCalledWith(
+      'cccccccc-turn3-report.html',
+      '<!doctype html><p>report</p>',
+      'text/html;charset=utf-8',
+    );
+    expect(element.querySelector('.report-error')).toBeNull();
+  });
+
+  it('says why a report could not be made, and lets the button be used again', async () => {
+    const api = fakeApi(async () => {
+      throw new ApiError(404, 'unknown_turn', 'This conversation has no answered question 1.');
+    });
+    const exporter = fakeExporter();
+    const { fixture, element } = await render({}, [], exporter, api);
+    button(element, 'Download report (HTML)').click();
+    await fixture.whenStable();
+    expect(text(element.querySelector('.report-error'))).toBe(
+      'This conversation has no answered question 1.',
+    );
+    expect(exporter.save).not.toHaveBeenCalled();
+    expect(button(element, 'Download report (HTML)').disabled).toBe(false);
   });
 });

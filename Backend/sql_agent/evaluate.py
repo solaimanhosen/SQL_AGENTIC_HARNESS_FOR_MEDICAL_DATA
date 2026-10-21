@@ -211,6 +211,17 @@ def score_case(case: EvalCase, result: AgentResult, db: ReadOnlyDatabase, before
         within = count <= expect["max_queries"]
         checks.append(CheckOutcome("max_queries", within, "" if within else f"used {count} queries"))
 
+    if expect.get("analysis"):
+        ran = {record.analysis.tool for record in result.successful_queries if record.analysis}
+        missing = [tool for tool in expect["analysis"] if tool not in ran]
+        checks.append(CheckOutcome("analysis", not missing, "" if not missing else f"did not run {', '.join(missing)}"))
+
+    if expect.get("chart"):
+        kinds = [chart.kind for chart in result.charts]
+        drawn = expect["chart"] in kinds
+        detail = "" if drawn else f"drew {', '.join(kinds) or 'no chart'}, not a {expect['chart']} chart"
+        checks.append(CheckOutcome("chart", drawn, detail))
+
     checks.append(
         CheckOutcome("traceability", not result.issues.any, "" if not result.issues.any else _issue_text(result))
     )
@@ -228,6 +239,7 @@ def _issue_text(result: AgentResult) -> str:
         parts.append(f"{len(issues.unsupported_findings)} findings cite no query")
     if issues.window_not_in_sql:
         parts.append(issues.window_not_in_sql)
+    parts += issues.chart_problems
     return "; ".join(parts)
 
 

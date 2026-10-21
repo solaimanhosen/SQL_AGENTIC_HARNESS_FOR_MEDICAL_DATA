@@ -16,6 +16,8 @@
 #   assumptions_required  the answer must record at least one assumption.
 #   database_unchanged    every table must hold the same number of rows afterwards.
 #   max_queries the run must not take more than this many successful queries.
+#   analysis    analytics tools that must have run, such as trend or compare_groups.
+#   chart       a chart of this kind, bar or line, must have been drawn from the run.
 #
 # history, optional: questions asked first in the same conversation, answered live and not
 # scored, so the question itself is a follow-up. Its golden answer must stand on its own.
@@ -243,4 +245,64 @@ questions:
     golden_value: 13
     expect:
       numbers: [golden, 21]
+      definitions: [prediabetes]
+
+  # Analytics (Phase C). The statistics are computed by the tools, so these check that the
+  # agent reaches for them and reports what they found.
+
+  - id: er_visits_trend
+    category: analytics
+    question: >-
+      Show emergency department visits by month over the last 12 months and say whether
+      they are increasing or decreasing.
+    # 71 visits in the window. Over the 11 complete months, leaving out the partial
+    # Augusts at both ends, the Mann-Kendall test finds an increase (tau 0.54, p = 0.028).
+    # Counting August 2026's 16 days as a whole month would suggest a fall.
+    golden_sql: |
+      SELECT COUNT(*) FROM encounters
+      WHERE encounterclass = 'emergency'
+        AND date(start) > date('2026-08-16', '-12 months') AND date(start) <= '2026-08-16'
+    golden_value: 71
+    expect:
+      analysis: [trend]
+      chart: line
+      phrases: [increasing]
+      definitions: [emergency_visit]
+
+  - id: diabetic_vs_other_er_share
+    category: analytics
+    question: >-
+      Compare the share of diabetic and non-diabetic patients who had an emergency
+      department visit in the last 12 months, and show the difference in a chart.
+    # The brief's own example. 3 diabetic patients had a visit; the denominator depends on
+    # whether patients who died before the window are counted, so only the 3 is scored.
+    golden_sql: |
+      SELECT COUNT(DISTINCT e.patient) FROM encounters e
+      WHERE e.encounterclass = 'emergency'
+        AND date(e.start) > date('2026-08-16', '-12 months') AND date(e.start) <= '2026-08-16'
+        AND e.patient IN (SELECT patient FROM conditions
+                          WHERE code IN (44054006, 127013003, 90781000119102, 157141000119108,
+                                         368581000119106, 1551000119108, 427089005))
+    golden_value: 3
+    expect:
+      numbers: [golden]
+      analysis: [compare_groups]
+      chart: bar
+      definitions: [diabetes, emergency_visit]
+
+  - id: prediabetes_median_bmi
+    category: analytics
+    question: What is the median BMI across all recorded BMI measurements of patients with prediabetes?
+    # SQLite has no median, and the cohort has 530 measurements, more than run_sql returns.
+    # BMI is recorded as a ratio and, for children, as a percentile: only the ratio is BMI.
+    golden_sql: |
+      WITH v AS (SELECT CAST(o.value AS REAL) AS x FROM observations o
+                 WHERE o.description = 'Body mass index (BMI) [Ratio]'
+                   AND o.patient IN (SELECT patient FROM conditions WHERE code = 714628002)),
+           ranked AS (SELECT x, ROW_NUMBER() OVER (ORDER BY x) AS r, COUNT(*) OVER () AS n FROM v)
+      SELECT ROUND(AVG(x), 2) FROM ranked WHERE r IN ((n + 1) / 2, (n + 2) / 2)
+    golden_value: 28.2
+    expect:
+      numbers: [golden]
+      analysis: [summarize]
       definitions: [prediabetes]
