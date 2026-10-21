@@ -56,7 +56,7 @@ from .limits import LimitExceeded, Reservation, SpendingLimits
 from .requestlog import RequestLogMiddleware
 from .runlog import log_run
 from .semantic import SemanticLayer, window_bounds
-from .tools import QueryRecord
+from .tools import AnalysisInfo, QueryRecord
 
 MAX_QUESTION_CHARS = 2_000
 # A question of the longest allowed length, in any script, fits well inside this.
@@ -100,6 +100,17 @@ class TimeWindowOut(BaseModel):
     """The window as the command line shows it, with the dates computed here."""
 
 
+class AnalysisOut(BaseModel):
+    tool: Literal["summarize", "trend", "compare_groups"]
+    label: str
+    """A short description, such as "trend by month over 5,571 rows"."""
+    parameters: dict[str, Any]
+    source_rows: int
+    """Rows the SQL returned. The query's own rows are the table computed from them."""
+    summary: list[str]
+    """What the computed table shows. Every figure in it was computed by the service."""
+
+
 class QueryOut(BaseModel):
     number: int | None
     sql: str
@@ -110,6 +121,8 @@ class QueryOut(BaseModel):
     error: str | None
     columns: list[str]
     rows: list[list[Any]]
+    analysis: AnalysisOut | None = None
+    """Set when an analytics tool produced this result. Answers stored before it existed lack it."""
 
 
 class IssuesOut(BaseModel):
@@ -445,7 +458,7 @@ STREAM_DESCRIPTION = """Server-sent events, read with fetch because the request 
 
 - `conversation`: `{conversation_id, turn}`, sent first.
 - `step`: `{kind, detail}` for each step, where kind is sql, sql_result, sql_error,
-  describe_table or lookup_definition.
+  analysis, describe_table or lookup_definition.
 - `answer_delta`: `{headline, findings}`, the whole answer text written so far, sent as it
   grows. It is a draft: unchecked, and without citations, definitions or dates.
 - `answer`: the same body `/api/ask` returns, which replaces any draft. The stream then ends.
@@ -689,6 +702,17 @@ def query_payload(record: QueryRecord) -> QueryOut:
         error=record.error,
         columns=list(record.columns),
         rows=[[_cell(value) for value in row] for row in record.rows],
+        analysis=analysis_payload(record.analysis) if record.analysis else None,
+    )
+
+
+def analysis_payload(info: AnalysisInfo) -> AnalysisOut:
+    return AnalysisOut(
+        tool=info.tool,
+        label=info.describe(),
+        parameters=dict(info.parameters),
+        source_rows=info.source_rows,
+        summary=list(info.summary),
     )
 
 

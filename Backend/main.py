@@ -19,6 +19,7 @@ import anthropic
 
 from sql_agent.agent import AgentError, AgentResult, SqlAgent, describe_failure
 from sql_agent.config import ConfigError
+from sql_agent.formatting import format_table
 from sql_agent.runlog import build_record, log_run
 
 
@@ -31,6 +32,8 @@ def print_event(kind: str, detail: str) -> None:
         print(f"  -> {detail}")
     elif kind == "sql_error":
         print(f"  -> failed: {detail}")
+    elif kind == "analysis":
+        print(f"  -> computed a {detail}")
     elif kind == "describe_table":
         print(f"  reading the schema of {detail}")
     elif kind == "lookup_definition":
@@ -43,9 +46,18 @@ def print_queries(result: AgentResult) -> None:
         return
     print("\nSQL that produced this answer")
     for record in result.successful_queries:
-        print(f"\n  Query {record.number}. {record.row_count} rows in {record.elapsed_ms:.0f} ms")
+        if record.analysis:
+            print(f"\n  Query {record.number}. {record.analysis.describe()}, in {record.elapsed_ms:.0f} ms")
+        else:
+            print(f"\n  Query {record.number}. {record.row_count} rows in {record.elapsed_ms:.0f} ms")
         for line in record.sql.strip().splitlines():
             print(f"     {line}")
+        if record.analysis:
+            print()
+            for line in format_table(record.columns, record.rows).splitlines():
+                print(f"     {line}")
+            for line in record.analysis.summary:
+                print(f"     - {line}")
 
 
 def print_traceability(result: AgentResult) -> None:

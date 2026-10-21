@@ -64,6 +64,14 @@ def test_cors_origins_default_to_the_angular_dev_server_and_can_be_listed():
     assert s.cors_origins == ("http://localhost:4200", "https://demo.example.org")
 
 
+def test_analysis_row_cap_defaults_and_bounds():
+    assert load_settings({}).analysis_max_rows == 100_000
+    assert load_settings({"SQL_AGENT_ANALYSIS_MAX_ROWS": "5000"}).analysis_max_rows == 5000
+    for bad in ("0", "2000000", "lots"):
+        with pytest.raises(ConfigError, match="SQL_AGENT_ANALYSIS_MAX_ROWS"):
+            load_settings({"SQL_AGENT_ANALYSIS_MAX_ROWS": bad})
+
+
 def test_csv_dir_override(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert load_settings({"SQL_AGENT_CSV_DIR": "data/other"}).csv_dir == BACKEND_DIR / "data" / "other"

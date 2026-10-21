@@ -14,8 +14,8 @@ from sql_agent.conversations import ConversationStore
 from sql_agent.limits import SpendingLimits
 from sql_agent.db import ReadOnlyDatabase
 from sql_agent.semantic import load_semantic_layer
-from sql_agent.service import MAX_QUESTION_CHARS, create_app
-from sql_agent.tools import QueryRecord
+from sql_agent.service import MAX_QUESTION_CHARS, answer_payload, create_app
+from sql_agent.tools import AnalysisInfo, QueryRecord
 
 AS_OF = date(2026, 8, 16)
 
@@ -552,6 +552,47 @@ def test_a_stored_conversation_is_returned_with_every_answer_as_it_was_sent(sett
     assert [turn["answer"] for turn in body["history"]] == [asked, followed]
     assert body["history"][0]["steps"][0] == {"kind": "sql", "detail": "SELECT COUNT(*) AS n FROM conditions"}
     assert body["history"][0]["answer"]["definitions_used"][0]["status"] == "assumed"
+
+
+def test_an_analysis_is_sent_with_its_label_settings_and_summary(settings, db):
+    info = AnalysisInfo(
+        tool="trend",
+        parameters={"date_column": "start", "period": "month", "measure": "count", "value_column": None, "start": None},
+        source_rows=545,
+        summary=("No clear trend.",),
+    )
+    record = QueryRecord(
+        sql="SELECT start FROM encounters", number=1, row_count=1, columns=("period", "count", "complete"),
+        rows=(("2026-07", 36, "yes"),), analysis=info,
+    )
+    result = dataclasses.replace(_result("q"), queries=(record,))
+    body = answer_payload(result, load_semantic_layer(), conversation_id="c" * 32, turn=1).model_dump(mode="json")
+    assert body["queries"][0]["analysis"] == {
+        "tool": "trend",
+        "label": "trend by month over 545 rows",
+        "parameters": info.parameters,
+        "source_rows": 545,
+        "summary": ["No clear trend."],
+    }
+    assert body["queries"][0]["rows"] == [["2026-07", 36, "yes"]]
+
+
+def test_an_answer_stored_before_analytics_existed_still_opens(settings, db, tmp_path):
+    settings = dataclasses.replace(settings, conversations_path=tmp_path / "conversations.db")
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    store = ConversationStore(settings.conversations_path)
+    (answer_json,) = store._db.execute("SELECT answer_json FROM turns").fetchone()
+    old = json.loads(answer_json)
+    for query in old["queries"]:
+        del query["analysis"]
+    store._db.execute("UPDATE turns SET answer_json = ?", (json.dumps(old),))
+    store._db.commit()
+
+    reopened, _ = _client(settings, db)
+    response = reopened.get(f"/api/conversations/{conversation_id}")
+    assert response.status_code == 200
+    assert response.json()["history"][0]["answer"]["queries"][0]["analysis"] is None
 
 
 def test_a_conversation_can_be_renamed_and_deleted(settings, db):

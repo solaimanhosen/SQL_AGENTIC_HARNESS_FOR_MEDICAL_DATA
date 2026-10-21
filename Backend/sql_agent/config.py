@@ -25,6 +25,7 @@ DEFAULT_DB_PATH = "synthea.db"
 DEFAULT_CSV_DIR = "data/synthea"
 DEFAULT_AS_OF = "latest"
 DEFAULT_MAX_ROWS = 200
+DEFAULT_ANALYSIS_MAX_ROWS = 100_000
 DEFAULT_QUERY_TIMEOUT = 15.0
 DEFAULT_LOG_PATH = "logs/runs.jsonl"
 DEFAULT_CORS_ORIGINS = "http://localhost:4200"
@@ -79,6 +80,8 @@ class Settings:
     """The database the service keeps conversations in, or None to keep them in memory."""
     store_result_rows: bool = True
     """Whether a stored answer keeps the rows its queries returned, or only what ran."""
+    analysis_max_rows: int = DEFAULT_ANALYSIS_MAX_ROWS
+    """Rows an analytics tool may read. Only its computed table reaches the model."""
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -117,6 +120,12 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         ),
         conversations_path=_parse_log_path(env.get("SQL_AGENT_CONVERSATIONS_PATH", DEFAULT_CONVERSATIONS_PATH)),
         store_result_rows=_parse_bool("SQL_AGENT_STORE_RESULT_ROWS", env.get("SQL_AGENT_STORE_RESULT_ROWS", "true")),
+        analysis_max_rows=_parse_int(
+            "SQL_AGENT_ANALYSIS_MAX_ROWS",
+            env.get("SQL_AGENT_ANALYSIS_MAX_ROWS", str(DEFAULT_ANALYSIS_MAX_ROWS)),
+            1,
+            1_000_000,
+        ),
     )
 
 

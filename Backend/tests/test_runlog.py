@@ -1,10 +1,11 @@
+import dataclasses
 import json
 from datetime import date
 
 from sql_agent.agent import AgentResult
 from sql_agent.answer import AnswerIssues, Finding, StructuredAnswer, TimeWindow
 from sql_agent.runlog import build_record, log_run
-from sql_agent.tools import QueryRecord
+from sql_agent.tools import AnalysisInfo, QueryRecord
 
 
 def _result() -> AgentResult:
@@ -29,6 +30,17 @@ def _result() -> AgentResult:
         input_tokens=1000,
         output_tokens=100,
     )
+
+
+def test_an_analysis_is_logged_with_its_settings_and_summary_but_not_its_rows():
+    info = AnalysisInfo(tool="trend", parameters={"period": "month"}, source_rows=545, summary=("No clear trend.",))
+    result = dataclasses.replace(
+        _result(),
+        queries=(QueryRecord(sql="SELECT start FROM encounters", number=1, row_count=1, columns=("period",), rows=(("2026-01",),), analysis=info),),
+    )
+    [query] = json.loads(json.dumps(build_record(result)))["queries"]
+    assert query["analysis"] == {"tool": "trend", "parameters": {"period": "month"}, "source_rows": 545, "summary": ["No clear trend."]}
+    assert "rows" not in query
 
 
 def test_record_holds_everything_needed_to_review_a_run():
