@@ -3,6 +3,8 @@ import { Injectable, InjectionToken, inject, signal } from '@angular/core';
 import { SseParser } from './sse';
 import {
   Answer,
+  AuthConfig,
+  AuthUser,
   ConversationChanges,
   ConversationDetail,
   ConversationSummary,
@@ -42,10 +44,47 @@ export class AgentApi {
   private readonly base = inject(API_BASE);
 
   /**
-   * The shared access token, when the service requires one. It is held in memory only, so it
-   * is gone when the page reloads and is never written to browser storage.
+   * Counts the times the service said the session is missing or has ended. The sign-in state
+   * watches it, so any request that finds itself signed out sends the person to sign in.
    */
-  readonly token = signal<string | null>(null);
+  readonly signedOut = signal(0);
+
+  async authConfig(): Promise<AuthConfig> {
+    const response = await this.request('/auth/config', { method: 'GET' });
+    return (await response.json()) as AuthConfig;
+  }
+
+  /** The signed-in person. A missing session is an ApiError with status 401. */
+  async me(): Promise<AuthUser> {
+    const response = await this.request('/auth/me', { method: 'GET' }, { quiet: true });
+    return (await response.json()) as AuthUser;
+  }
+
+  async login(email: string, password: string): Promise<AuthUser> {
+    return this.postAuth('/auth/login', { email, password });
+  }
+
+  async register(email: string, password: string, name: string): Promise<AuthUser> {
+    return this.postAuth('/auth/register', { email, password, name });
+  }
+
+  async logout(): Promise<void> {
+    await this.request('/auth/logout', { method: 'POST' }, { quiet: true });
+  }
+
+  private async postAuth(path: string, body: object): Promise<AuthUser> {
+    // A refusal here is a wrong password or a taken email, not an ended session.
+    const response = await this.request(
+      path,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+      { quiet: true },
+    );
+    return (await response.json()) as AuthUser;
+  }
 
   async health(): Promise<Health> {
     const response = await this.request('/health', { method: 'GET' });
@@ -159,15 +198,25 @@ export class AgentApi {
     throw new ApiError(502, 'stream_ended', 'The service stopped before sending an answer.');
   }
 
-  private async request(path: string, init: RequestInit): Promise<Response> {
+  /**
+   * Every request carries the header that tells the service it came from this application,
+   * and the session cookie, which the browser adds itself. A 401 means the session is gone,
+   * unless `quiet` says the caller handles it.
+   */
+  private async request(
+    path: string,
+    init: RequestInit,
+    { quiet = false }: { quiet?: boolean } = {},
+  ): Promise<Response> {
     const headers = new Headers(init.headers);
-    const token = this.token();
-    if (token) {
-      headers.set('Authorization', `Bearer ${token}`);
-    }
+    headers.set('X-Requested-With', 'sql-agent');
     let response: Response;
     try {
-      response = await this.fetch(`${this.base}${path}`, { ...init, headers });
+      response = await this.fetch(`${this.base}${path}`, {
+        ...init,
+        headers,
+        credentials: 'same-origin',
+      });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         throw error;
@@ -175,6 +224,9 @@ export class AgentApi {
       throw new ApiError(0, 'unreachable', UNREACHABLE);
     }
     if (!response.ok) {
+      if (response.status === 401 && !quiet) {
+        this.signedOut.update((count) => count + 1);
+      }
       throw await errorFrom(response);
     }
     return response;

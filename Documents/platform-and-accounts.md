@@ -35,7 +35,7 @@ PostgreSQL and deployment move to Phase E, Steps 24 and 25.
 | | v3.0.0 | Phase D |
 |---|---|---|
 | Model | Opus 5 at high effort, fixed in `.env` | Six models and five effort levels, chosen per question |
-| Who can use it | Anyone with the one shared token | Registered users, with user and admin roles |
+| Who can use it | Anyone with the one shared token | Registered users, by password or Google, with user and admin roles |
 | Whose conversations | Everyone's, in one list | Your own only |
 | Theme | Follows the operating system | System, light or dark, chosen in the header |
 | Conversation address | `/#<id>` | `/c/<id>`. Old links still work |
@@ -217,21 +217,84 @@ The design is ADR 0005.
 - `evaluate --model X --effort Y` scores any model and estimates the cost of the run.
 - The 23-question evaluation was **not** run on the new models, as agreed.
 
-### Accounts (Steps 19 and 20)
+### Accounts (Step 19)
+
+The design is ADR 0006, and Google sign-in is ADR 0007.
+
+**Where they live.**
+- Users, sessions, pending Google sign-ins and settings live in `data/conversations.db`,
+  beside the conversations, at schema version 4.
+- `appdb.py` now owns that file's connection and migrations, and the conversation store
+  and the account store both use it.
+
+**Two ways in.**
+- Email and password:
+  - passwords are hashed with scrypt from the standard library, 12 to 128 characters;
+  - a wrong password and an unknown email get the same answer;
+  - failed sign-ins are throttled.
+- Google, by OpenID Connect with PKCE, using `httpx`, which was already installed. Nothing
+  new was added.
+- Google is off until a client ID and secret are in `.env`. When it is off, the button does
+  not appear.
+
+**Sessions.**
+- A 32-byte random token in an HttpOnly, SameSite=Strict cookie, sent only to `/api`, and
+  over HTTPS only by default. Chrome keeps such a cookie on `http://localhost`, so local
+  development needs no change.
+- Only the token's hash is stored.
+- A session ends after 30 idle days, after 90 days in all, on sign-out, or when the account
+  is disabled.
+- Page scripts cannot read it, which the browser check confirmed.
+
+**Cross-site requests.** Anything that changes state must carry
+`X-Requested-With: sql-agent`, which another site's page cannot send. Any `Origin` it names
+must be ours.
+
+**Isolation.**
+- Every conversation query takes its owner.
+- Another person's conversation is answered exactly like one that does not exist, for every
+  route, follow-up questions included.
+- The 1,000-conversation cap applies per person, so nobody's use evicts anyone else's.
+
+**Roles.**
+- `user` and `admin`. Only admins may pick Fable 5.1.
+- A new chat starts on the person's own default model when they have set one.
+
+**Budgets.** Each person has a daily token budget, 1,000,000 by default, beside the
+service's own.
+
+**The Google linking rule.**
+- A Google sign-in links to an existing account only if that account's email was verified,
+  by Google or by an admin.
+- A self-registered password account is never linked by email. Otherwise someone could
+  register a victim's address first and take the account later.
+
+**The command line.** `python -m sql_agent.users` creates accounts and admins, lists them,
+changes roles, disables, resets passwords, and opens or closes registration.
+- Passwords are typed at a hidden prompt.
+- `--claim-unowned` gives the conversations from before accounts to the first admin. Until
+  then nobody can see them.
+
+**In the interface.**
+- Sign-in and sign-up pages built on the design system, with "Continue with Google" when it
+  is on.
+- A guard that sends a signed-out person to sign in and back to the conversation they
+  opened.
+- An avatar in the header with the person's name, email, role and Sign out.
+- The token prompt is gone.
+
+### Accounts page (Step 20)
 
 Planned:
-- **Passwords:** hashed with scrypt from the standard library, so there is no new
-  dependency.
-- **Sessions:** an HttpOnly, SameSite=Strict cookie, with only the token's hash stored.
-- **Protection:** CSRF checks and rate-limited sign-in.
-- **Isolation:** every conversation query is filtered by its owner, and another user's
-  conversation answers "not found".
-- **Registration:** open, and an admin can switch it off.
-- **The first admin:** created from the command line.
-- **Budgets:** each user gets their own daily token budget.
-- The shared token is retired.
-- **Profile menu:** at the top right of the header, with Account settings, Admin console
-  (admins only) and Sign out.
+- An account page with these sections:
+  - profile;
+  - password;
+  - sessions, with sign out everywhere;
+  - connecting and disconnecting Google;
+  - default model and effort;
+  - theme;
+  - usage.
+- The full profile menu, with Account settings and Admin console (admins only).
 
 ### Admin console (Steps 21 and 22)
 
@@ -262,6 +325,11 @@ Planned:
   5 at high effort is known to answer all 23 questions correctly.
 - Accounts bring passwords. They are hashed and never logged, but resetting one needs an
   admin, because there is no email service.
+- Registration is open by default, with no email check or CAPTCHA, so one person can make
+  many accounts. Each has its own budget and the service's budget caps the total, but a
+  deployed instance should close registration or add verification.
+- Nobody verifies a self-registered email. That is why Google never links to such an
+  account.
 - The admin console can start the test suite from a browser. It runs one fixed command, and
   only for an admin session.
 
@@ -273,9 +341,9 @@ Work is on the branch `sql_agent/platform/dev`, cut from `main` at `004d106`.
 |---|---|---|---|
 | 16 | Design system, themes, router, icons, wider column | Done | `f01a0fa` |
 | 17 | Sidebar: rail, search, Pinned, Recents and All chats | Done | `93d0716`, `c0d3535` |
-| 18 | Model and effort selection | Done | this step's commits |
-| 19 | Accounts: backend | Planned | |
-| 20 | Accounts: interface and profile menu | Planned | |
+| 18 | Model and effort selection | Done | `9d104b8`, `7741cb6` |
+| 19 | Accounts: password and Google sign-in, ownership, roles, sign-in pages | Done | this step's commits |
+| 20 | Account page and the full profile menu | Planned | |
 | 21 | Admin console: backend jobs and monitoring | Planned | |
 | 22 | Admin console: interface | Planned | |
 | 23 | Polish, browser checks, records, merge and v4.0.0 | Planned | |
@@ -373,6 +441,60 @@ harder questions: that needs `evaluate --model`.
 - Opening that conversation's address restored Haiku 5.5 and low effort in the picker.
 - At 390 px the two menus fit beside the send button, with no sideways scroll.
 
+### Step 19
+
+| Check | After Step 18 | After Step 19 |
+|---|---|---|
+| Backend tests, no network | 407 passed, 3 skipped | 490 passed, 3 skipped |
+| Interface tests, no network | 140 passed | 152 passed |
+| Security catalogue | 78 of 78 | 78 of 78 |
+| New dependencies | | None (`httpx` was already installed, and is now listed) |
+
+**New backend tests:**
+- password hashing and rules;
+- sessions: expiry at 30 idle and 90 days, sign-out, disabling, revoking;
+- registration, sign-in, throttling, and identical answers for a wrong password and an
+  unknown email;
+- the cross-site check;
+- a second user refused every route on the first user's conversation;
+- per-owner eviction;
+- per-person budgets;
+- admin-only models;
+- schema upgrades from v3;
+- the `users` command;
+- Google with a fake token endpoint:
+  - the state: missing, mismatched, reused, expired;
+  - each claim;
+  - the linking rules, including refusing a self-registered account;
+  - connecting from a signed-in account;
+  - unsafe return paths.
+
+**New interface tests:**
+- sign-in and sign-up;
+- a wrong password;
+- a `next` that would leave the application;
+- Google error codes;
+- the guards;
+- a 401 sending the person to sign in and back;
+- the avatar menu and Sign out.
+
+The tests found one real bug: a route guard called `inject()` after an `await`.
+
+**Checked in headless Chrome**, against a copy of the real conversations file. It upgraded to
+version 4, and the 11 older conversations were claimed by a scratch admin:
+- Opening a conversation signed out went to `/login?next=/c/...`.
+- A wrong password got the generic message.
+- A new account started with an empty list of its own and could not pick Fable 5.1.
+- Its cookie was HttpOnly, Secure and Strict, on `/api`, and the page could not read it.
+- A request without the application header got a 403.
+- Sign Out returned to the sign-in page.
+- The admin saw the 11 older conversations and Fable 5.1.
+- With placeholder Google credentials, the button appeared, and the start route redirected
+  to Google with the redirect URI built from `SQL_AGENT_PUBLIC_URL`.
+- No sideways scroll at 390 px, in both themes.
+
+A live Google sign-in waits for real credentials.
+
 ## Demo notes
 
 To be written at Step 23. Things worth showing so far:
@@ -380,6 +502,10 @@ To be written at Step 23. Things worth showing so far:
 - Copying a conversation's address into a new tab, where it opens.
 - Collapsing the sidebar to the rail and back: the toggle does not move.
 - Pinning a chat, then pressing Ctrl+K and searching for a word from a follow-up question.
+- Signing up as a new person in a private window: an empty sidebar, and no Fable 5.1 in the
+  picker. Then signing in as the admin in the main window: every older conversation, and
+  Fable 5.1. Pasting the admin's conversation address into the private window gives "not
+  found".
 - Asking the same question on Haiku 5.5 at low effort and on Opus 5 at high effort, and
   comparing the two answers' meta lines: time, tokens and model. Point at "Not yet
   evaluated" in the menu: the picker says plainly which models have been scored.

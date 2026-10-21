@@ -82,6 +82,7 @@
     </div>
     <div class="actions">
       <app-theme-toggle />
+      <app-profile-menu />
     </div>
   </header>
 
@@ -114,9 +115,6 @@
       <app-exchange-view [exchange]="exchange" (retry)="store.retry($event)" />
     }
 
-    @if (store.needsToken()) {
-      <app-token-prompt (save)="useToken($event)" />
-    }
     <div #end></div>
   </main>
 

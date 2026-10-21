@@ -132,6 +132,24 @@ export interface ConversationSummary {
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/** The signed-in person, as /api/auth/me returns them. */
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: 'user' | 'admin';
+  has_password: boolean;
+  google_linked: boolean;
+  default_model: string | null;
+  default_effort: Effort | null;
+}
+
+/** What the sign-in pages should offer. */
+export interface AuthConfig {
+  registration_open: boolean;
+  google_enabled: boolean;
+}
+
 /** One model the agent may run on, as /api/models describes it. */
 export interface ModelInfo {
   id: string;

@@ -1,4 +1,10 @@
-import { Answer, ConversationDetail, ConversationSummary, ModelCatalog } from '../api/types';
+import {
+  Answer,
+  AuthUser,
+  ConversationDetail,
+  ConversationSummary,
+  ModelCatalog,
+} from '../api/types';
 
 /** A complete answer as the service returns it, with any field overridden. */
 export function answerFixture(overrides: Partial<Answer> = {}): Answer {
@@ -109,5 +115,20 @@ export function catalogFixture(): ModelCatalog {
         evaluated: null,
       },
     ],
+  };
+}
+
+/** A signed-in person, with any field overridden. */
+export function userFixture(overrides: Partial<AuthUser> = {}): AuthUser {
+  return {
+    id: 'u'.repeat(32),
+    email: 'ann@example.org',
+    name: 'Ann Lee',
+    role: 'user',
+    has_password: true,
+    google_linked: false,
+    default_model: null,
+    default_effort: null,
+    ...overrides,
   };
 }

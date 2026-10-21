@@ -7,6 +7,11 @@ v1 is the backend, v2 adds the web interface, v3 adds analytics, charts and repo
 
 Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-accounts.md`.
 
+### Removed
+
+- The shared access token (`SQL_AGENT_API_TOKEN`) and the page that asked for it. Accounts
+  replace them.
+
 ### Added
 
 - A design system in `styles.css`: spacing, type, radius, shadow and motion tokens, and
@@ -40,6 +45,25 @@ Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-account
 - `evaluate --model --effort` to score any model, with the estimated cost in the report.
 - `check_setup` compares the catalog with the live Models API, and `--all-models` makes one
   small call to each model.
+- Accounts (ADR 0006).
+  - Sign up and sign in with email and password, or with Google (ADR 0007).
+  - Each person sees only their own conversations. Another person's conversation answers
+    404.
+  - Two roles, user and admin. Only admins may pick Fable 5.1.
+  - Sessions are HttpOnly, SameSite=Strict cookies with only their hash stored, ending after
+    30 idle or 90 days, on sign-out, or when the account is disabled.
+  - Requests that change something must carry `X-Requested-With: sql-agent`.
+  - Failed sign-ins are throttled.
+  - Each person has a daily token budget.
+- `python -m sql_agent.users` to create accounts and admins, list them, change roles, disable
+  them, reset passwords, and open or close registration. `--claim-unowned` gives the
+  conversations from before accounts to the first admin.
+- Sign-in and sign-up pages, a guard that sends a signed-out person to them and back, and an
+  avatar menu with Sign out.
+- Account routes: `/api/auth/*` and `/api/account/*` (profile, default model, password,
+  sessions).
+- Schema version 4: users, sessions, pending Google sign-ins and settings in the application
+  database, now opened by `appdb.py`.
 - Schema versions for `data/conversations.db`. A v3 file upgrades in place when opened, and a
   file from a newer version is refused untouched.
 

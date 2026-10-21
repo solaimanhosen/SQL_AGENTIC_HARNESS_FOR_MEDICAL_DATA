@@ -1,5 +1,7 @@
 import { Routes, UrlMatchResult, UrlSegment } from '@angular/router';
 
+import { signedInGuard, signedOutGuard } from './auth/auth';
+import { AuthPage } from './auth/auth-page';
 import { CONVERSATION_ID, ChatPage } from './chat/chat-page';
 
 /**
@@ -18,6 +20,25 @@ export function chatMatcher(segments: UrlSegment[]): UrlMatchResult | null {
 }
 
 export const routes: Routes = [
-  { matcher: chatMatcher, component: ChatPage, title: 'Patient data questions' },
+  {
+    path: 'login',
+    component: AuthPage,
+    data: { mode: 'login' },
+    canActivate: [signedOutGuard],
+    title: 'Sign in · Patient data questions',
+  },
+  {
+    path: 'register',
+    component: AuthPage,
+    data: { mode: 'register' },
+    canActivate: [signedOutGuard],
+    title: 'Create an account · Patient data questions',
+  },
+  {
+    matcher: chatMatcher,
+    component: ChatPage,
+    canActivate: [signedInGuard],
+    title: 'Patient data questions',
+  },
   { path: '**', redirectTo: '' },
 ];

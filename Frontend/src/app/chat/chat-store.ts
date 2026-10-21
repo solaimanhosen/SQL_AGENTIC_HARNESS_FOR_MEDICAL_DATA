@@ -52,8 +52,6 @@ export class ChatStore {
   readonly busy = computed(() =>
     this.exchanges().some((exchange) => exchange.status === 'working'),
   );
-  /** True after the service refused a question for want of the access token. */
-  readonly needsToken = signal(false);
   /** The models on offer. Null until the service has said, when its default applies. */
   readonly catalog = signal<ModelCatalog | null>(null);
   /** The model and effort the next question runs on. It may change between questions. */
@@ -67,10 +65,9 @@ export class ChatStore {
       if (!this.choice()) {
         this.choice.set({ model: catalog.default_model, effort: catalog.default_effort });
       }
-    } catch (error) {
-      if (error instanceof ApiError && error.kind === 'unauthorized') {
-        this.needsToken.set(true);
-      }
+    } catch {
+      // Without the list the picker stays hidden and the service's default applies. An
+      // ended session is handled where every request reports it (Auth).
     }
   }
 
@@ -114,10 +111,8 @@ export class ChatStore {
   async refreshConversations(): Promise<void> {
     try {
       this.conversations.set(await this.api.conversations());
-    } catch (error) {
-      if (error instanceof ApiError && error.kind === 'unauthorized') {
-        this.needsToken.set(true);
-      }
+    } catch {
+      // Kept as it was; an ended session sends the person to sign in (Auth).
     }
   }
 
@@ -144,9 +139,7 @@ export class ChatStore {
       }
       return true;
     } catch (error) {
-      if (error instanceof ApiError && error.kind === 'unauthorized') {
-        this.needsToken.set(true);
-      } else if (error instanceof ApiError && error.kind === 'unknown_conversation') {
+      if (error instanceof ApiError && error.kind === 'unknown_conversation') {
         this.conversations.update((list) => list.filter((item) => item.id !== id));
       }
       return false;
@@ -197,9 +190,6 @@ export class ChatStore {
       if (count === this.searchCount) {
         this.searchResults.set([]);
       }
-      if (error instanceof ApiError && error.kind === 'unauthorized') {
-        this.needsToken.set(true);
-      }
     }
   }
 
@@ -244,7 +234,6 @@ export class ChatStore {
           this.patch(id, { status: 'answered', answer: event.answer, draft: undefined });
         }
       }
-      this.needsToken.set(false);
       void this.refreshConversations();
     } catch (error) {
       const failure =
@@ -259,9 +248,6 @@ export class ChatStore {
           void this.refreshConversations();
           return;
         }
-      }
-      if (failure.kind === 'unauthorized') {
-        this.needsToken.set(true);
       }
       if (failure.kind === 'unknown_conversation') {
         // The service restarted or forgot the conversation. The next question starts anew.

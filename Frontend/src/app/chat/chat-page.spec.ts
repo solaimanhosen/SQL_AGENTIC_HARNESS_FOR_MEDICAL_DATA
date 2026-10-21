@@ -1,3 +1,4 @@
+import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
@@ -10,6 +11,7 @@ import {
   catalogFixture,
   conversationFixture,
   summaryFixture,
+  userFixture,
 } from '../testing/fixtures';
 import { ChatPage, EXAMPLE_QUESTIONS } from './chat-page';
 
@@ -26,7 +28,10 @@ function fakeApi(
   health: () => Promise<Health> = async () => HEALTH,
 ) {
   return {
-    token: { set: vi.fn() },
+    signedOut: signal(0),
+    me: vi.fn(async () => userFixture()),
+    authConfig: vi.fn(async () => ({ registration_open: true, google_enabled: false })),
+    logout: vi.fn(async () => undefined),
     health: vi.fn(health),
     askStream: vi.fn(stream),
     conversations: vi.fn(async (_search?: string): Promise<ConversationSummary[]> => []),
@@ -156,37 +161,48 @@ describe('ChatPage', () => {
     expect(element.querySelector('.draft')).toBeNull();
   });
 
-  it('asks for the access token after a refusal and retries with it', async () => {
-    let attempts = 0;
+  it('sends you to sign in when the session has ended, and back here afterwards', async () => {
     const api = fakeApi(async function* () {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new ApiError(
-          401,
-          'unauthorized',
-          'Send the service token as: Authorization: Bearer <token>.',
-        );
-      }
-      yield* answers();
+      // What the real client does when the service answers 401.
+      api.signedOut.update((count) => count + 1);
+      throw new ApiError(401, 'unauthenticated', 'Sign in to continue.');
     });
+    const { fixture, element } = await render(api, '/c/' + 'c'.repeat(32));
+    await vi.waitFor(async () => {
+      await fixture.whenStable();
+      expect(element.querySelector('.headline')).not.toBeNull();
+    });
+
+    (element.querySelector('textarea') as HTMLTextAreaElement).value = 'And now?';
+    element.querySelector('textarea')!.dispatchEvent(new Event('input'));
+    await fixture.whenStable();
+    element
+      .querySelector('textarea')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    await vi.waitFor(async () => {
+      await fixture.whenStable();
+      expect(address()).toBe('/login?next=%2Fc%2F' + 'c'.repeat(32));
+    });
+  });
+
+  it('shows who is signed in, and signs out from the profile menu', async () => {
+    const api = fakeApi(answers);
     const { fixture, element } = await render(api);
-
-    (element.querySelector('.example') as HTMLButtonElement).click();
+    const avatar = element.querySelector('app-profile-menu button') as HTMLButtonElement;
+    expect(avatar.textContent?.trim()).toBe('AL');
+    expect(avatar.getAttribute('aria-label')).toBe('Account: Ann Lee');
+    avatar.click();
     await fixture.whenStable();
-    const input = element.querySelector('#token') as HTMLInputElement;
-    expect(input).not.toBeNull();
-
-    input.value = 'the-shared-token';
-    input.dispatchEvent(new Event('input'));
-    await fixture.whenStable();
-    (element.querySelector('app-token-prompt form') as HTMLFormElement).dispatchEvent(
-      new Event('submit'),
-    );
-    await fixture.whenStable();
-
-    expect(api.token.set).toHaveBeenCalledWith('the-shared-token');
-    expect(element.querySelector('#token')).toBeNull();
-    expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
+    expect(document.querySelector('.profile .email')?.textContent).toBe('ann@example.org');
+    const signOut = [...document.querySelectorAll<HTMLButtonElement>('.profile .menu-item')].find(
+      (item) => item.textContent?.trim() === 'Sign out',
+    )!;
+    signOut.click();
+    await vi.waitFor(async () => {
+      await fixture.whenStable();
+      expect(address()).toBe('/login');
+    });
+    expect(api.logout).toHaveBeenCalled();
   });
 
   it('sends a typed question with Enter and clears the box', async () => {

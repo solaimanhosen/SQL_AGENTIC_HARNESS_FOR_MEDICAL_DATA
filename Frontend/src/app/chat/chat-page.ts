@@ -29,13 +29,13 @@ import {
   maxWidth,
   saveLayout,
 } from '../sidebar-layout';
+import { ProfileMenu } from '../ui/profile-menu';
 import { ThemeToggle } from '../ui/theme-toggle';
 import { storageOf } from '../ui/theme';
 import { ChatStore } from './chat-store';
 import { Composer } from './composer';
 import { ExchangeView } from './exchange-view';
 import { Sidebar, SidebarMode } from './sidebar';
-import { TokenPrompt } from './token-prompt';
 
 export const EXAMPLE_QUESTIONS = [
   'How many patients have diabetes?',
@@ -58,9 +58,9 @@ export const CONVERSATION_ID = /^[0-9a-f]{32}$/;
     Composer,
     ExchangeView,
     LucidePanelLeft,
+    ProfileMenu,
     Sidebar,
     ThemeToggle,
-    TokenPrompt,
   ],
   templateUrl: './chat-page.html',
   styleUrl: './chat-page.css',
@@ -160,17 +160,14 @@ export class ChatPage implements OnInit {
     // Links from before the router named the conversation after a "#".
     const legacy = this.route.snapshot.fragment;
     const id = this.id() ?? (legacy && CONVERSATION_ID.test(legacy) ? legacy : null);
-    if (id && id !== this.store.conversationId() && !this.store.needsToken()) {
+    if (id && id !== this.store.conversationId()) {
       await this.store.open(id);
     }
-    // While the token is still needed the address is left alone, to be tried again with it.
-    if (!this.store.needsToken()) {
-      // Correct the address first, so following it afterwards changes nothing.
-      if ((this.id() ?? null) !== this.store.conversationId() || legacy) {
-        await this.address(this.store.conversationId());
-      }
-      this.restored.set(true);
+    // Correct the address first, so following it afterwards changes nothing.
+    if ((this.id() ?? null) !== this.store.conversationId() || legacy) {
+      await this.address(this.store.conversationId());
     }
+    this.restored.set(true);
   }
 
   /** Show the conversation the address names, or a new chat. */
@@ -298,18 +295,6 @@ export class ChatPage implements OnInit {
 
   protected ask(question: string): void {
     void this.store.ask(question);
-  }
-
-  protected useToken(token: string): void {
-    this.api.token.set(token);
-    this.store.needsToken.set(false);
-    const failed = this.store.lastFailed();
-    if (failed) {
-      void this.store.retry(failed.id);
-    }
-    if (!this.restored()) {
-      void this.store.loadModels().then(() => this.restore());
-    }
   }
 
   protected healthInfo(): Health | null {

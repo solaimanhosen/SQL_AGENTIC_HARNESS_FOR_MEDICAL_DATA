@@ -119,22 +119,19 @@ describe('ChatStore', () => {
     expect(store.exchanges()).toEqual([]);
   });
 
-  it('asks for the token when the service refuses without it, then retries', async () => {
+  it('marks a question refused for an ended session as failed, to ask again after signing in', async () => {
     let attempts = 0;
     const { store } = setup(async function* (question, conversationId) {
       attempts += 1;
       if (attempts === 1) {
-        throw new ApiError(401, 'unauthorized', 'Send the service token.');
+        throw new ApiError(401, 'unauthenticated', 'Sign in to continue.');
       }
       yield* answered(question, conversationId);
     });
 
     await store.ask('How many?');
-    expect(store.needsToken()).toBe(true);
     expect(store.exchanges()[0].status).toBe('failed');
-
     await store.retry(store.lastFailed()!.id);
-    expect(store.needsToken()).toBe(false);
     expect(store.exchanges()[0].status).toBe('answered');
   });
 

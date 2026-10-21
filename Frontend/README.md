@@ -25,9 +25,10 @@ The development server forwards every `/api` request to the service
 (`proxy.conf.json`), so the browser sees one origin, just as it would behind a production
 web server. If the service is not running, the header says so.
 
-If the service was started with `SQL_AGENT_API_TOKEN`, the page asks for the token after
-the first refusal. It keeps the token in memory until the page is closed or reloaded, and
-never writes it to browser storage.
+You sign in with an account; make the first one with
+`python -m sql_agent.users create you@example.org --admin --claim-unowned` from `Backend/`,
+or create one on the sign-up page. The session is an HttpOnly cookie the page cannot read.
+When it ends, the page sends you to sign in and back to where you were.
 
 ## Commands
 
@@ -43,7 +44,7 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | Path | What it does |
 |---|---|
 | `src/app/api/types.ts` | The shapes the service returns. The service's `/docs` page is the reference. |
-| `src/app/api/agent-api.ts` | Calls the service. Reads `/api/ask/stream` with `fetch`, because the browser's `EventSource` cannot send a POST or a token. |
+| `src/app/api/agent-api.ts` | Calls the service. Reads `/api/ask/stream` with `fetch`, because the browser's `EventSource` cannot send a POST. Sends `X-Requested-With: sql-agent` on every request, and reports a 401 so the page can send the person to sign in. |
 | `src/app/api/sse.ts` | Parses server-sent events from text chunks that can split anywhere. |
 | `src/app/chat/chat-store.ts` | The conversation on screen and the list of stored ones: each question, its live steps, its draft and its answer. Opens, renames and deletes stored conversations, and fetches an answer from the service if only the stream was lost. |
 | `src/app/chat/sidebar.*` | The conversation list, in three modes: full, a rail of icons when collapsed, and a drawer at phone width. Its toggle stays at the same top-left spot in all of them. New chat, search (Ctrl or ⌘K), the Pinned, Recents and All chats sections, and a "⋯" menu per row to pin, rename or delete. |
@@ -60,7 +61,9 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/chat/step-log.ts` | Every step the agent took, with the SQL of each query, live and afterwards. |
 | `src/app/chat/composer.ts` | The question box. Enter sends, Shift+Enter adds a line. |
 | `src/app/chat/model-picker.ts` | Two menus in the question box: the model, with its price and evaluation status, and the effort. The choice applies to the next question; a reopened conversation continues on its latest answer's model. |
-| `src/app/chat/token-prompt.ts` | Asks for the access token when the service requires one. |
+| `src/app/auth/auth.ts` | Who is signed in, the guards for the chat and the sign-in pages, and the messages for Google sign-in codes. |
+| `src/app/auth/auth-page.ts` | Sign in and create an account: email and password, and "Continue with Google" when the service offers it. |
+| `src/app/ui/profile-menu.ts` | The avatar in the header: who is signed in, and Sign out. |
 | `src/app/app.ts`, `app.routes.ts`, `app.config.ts` | The root, which is only a router outlet, and the routes: `/` is a new chat and `/c/<id>` a stored one, matched by one route so the page is kept when a new chat gets its id. Old `/#<id>` links are moved to the new address. |
 | `src/app/chat/chat-page.*` | The chat screen: sidebar with its draggable edge, the header with service status and the theme menu, example questions, the thread and the question box. Keeps the address and the conversation on screen in step. |
 | `src/app/ui/theme.ts`, `theme-toggle.ts` | System, light or dark. The choice is kept in this browser; `index.html` applies it before the app starts. |

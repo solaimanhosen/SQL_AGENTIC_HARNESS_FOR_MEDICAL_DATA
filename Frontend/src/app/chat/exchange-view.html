@@ -43,7 +43,7 @@
     @case ('failed') {
       <div class="card failed" role="alert">
         <p>{{ item.error?.message }}</p>
-        @if (item.error?.kind !== 'unauthorized') {
+        @if (item.error?.kind !== 'unauthenticated') {
           <button type="button" class="link" (click)="retry.emit(item.id)">Try again</button>
         }
       </div>
