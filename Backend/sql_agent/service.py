@@ -491,6 +491,8 @@ def create_app(
             google=google,
             token_exchange=token_exchange,
             throttle=throttle or SignInThrottle(),
+            limits=limits,
+            conversations=conversations,
         )
     )
     app.state.accounts = accounts
@@ -522,6 +524,11 @@ class _Choice:
 
     model: str
     effort: str
+
+
+def utc_midnight() -> str:
+    """The start of today in UTC, as stored times are written."""
+    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
 
 
 def _defaults(agent: SqlAgent, user: User) -> tuple[str, str]:
@@ -572,7 +579,10 @@ def _claim(
     conversation_id, history, turn = conversations.begin(conversation_id, owner=user.id)
     try:
         reservation = limits.reserve(
-            conversation_id, already_spent=conversations.tokens_spent(conversation_id), user_id=user.id
+            conversation_id,
+            already_spent=conversations.tokens_spent(conversation_id),
+            user_id=user.id,
+            user_spent_today=conversations.tokens_since(owner=user.id, since=utc_midnight()),
         )
     except LimitExceeded:
         conversations.finish(conversation_id, None)

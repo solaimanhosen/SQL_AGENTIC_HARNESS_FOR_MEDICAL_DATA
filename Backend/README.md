@@ -117,6 +117,8 @@ for `localhost`; set it to `false` for plain HTTP on this machine.
 | PATCH | `/api/account` | Change your name, or default model and effort. |
 | POST | `/api/account/password` | `{current, new}`: change your password. |
 | GET, DELETE, POST | `/api/account/sessions`, `/{id}`, `/revoke-others` | List your sessions and sign them out. |
+| POST | `/api/account/google/disconnect` | Disconnect Google; refused for an account with no password. |
+| GET | `/api/account/usage` | Your tokens today against your daily budget, and this month's questions, tokens and estimated cost by model. |
 | GET | `/api/schema` | The documented tables and columns. Identity columns never appear. |
 | GET | `/api/definitions` | Every shared definition with its confirmation status. |
 | GET | `/api/usage` | Questions running now and tokens spent today against the daily budget. |

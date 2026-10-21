@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import asdict
+from datetime import datetime, timezone
 
 import anyio
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -29,7 +30,9 @@ from .google_login import (
     resolve_account,
     safe_next,
 )
-from .models import ModelChoiceError, resolve_choice
+from .conversations import ConversationStore
+from .limits import SpendingLimits
+from .models import ModelChoiceError, find_model, resolve_choice
 from .passwords import MAX_PASSWORD_CHARS
 
 
@@ -82,6 +85,29 @@ class SessionOut(BaseModel):
     current: bool
 
 
+class ModelUsageOut(BaseModel):
+    model: str
+    label: str
+    questions: int
+    input_tokens: int
+    output_tokens: int
+    estimated_cost_usd: float | None
+    """At the catalog's base prices; None for a model no longer in the catalog."""
+
+
+class MyUsageOut(BaseModel):
+    day: str
+    today_tokens: int
+    """Tokens spent or held by questions today, counted against the daily budget."""
+    daily_budget: int | None
+    month_start: str
+    questions: int
+    input_tokens: int
+    output_tokens: int
+    estimated_cost_usd: float
+    by_model: list[ModelUsageOut]
+
+
 class InvalidCredentials(Exception):
     """The email and password do not match an enabled account."""
 
@@ -107,6 +133,8 @@ def account_router(
     google: GoogleConfig | None,
     token_exchange: TokenExchange,
     throttle: SignInThrottle,
+    limits: SpendingLimits,
+    conversations: ConversationStore,
 ) -> APIRouter:
     router = APIRouter()
     secure = settings.secure_cookies
@@ -197,6 +225,43 @@ def account_router(
     def revoke_others(request: Request, user: User = Depends(sessions.current)) -> dict:
         return {"revoked": accounts.revoke_other_sessions(user.id, request.state.session_id)}
 
+    @router.get("/api/account/usage")
+    def my_usage(user: User = Depends(sessions.current)) -> MyUsageOut:
+        """What you have spent: today against your budget, and this month by model."""
+        now = datetime.now(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        rows = conversations.usage_by_model(owner=user.id, since=month_start.isoformat())
+        by_model = []
+        for row in rows:
+            option = find_model(row["model"] or "")
+            cost = option.cost(row["input_tokens"] or 0, row["output_tokens"] or 0) if option else None
+            by_model.append(
+                ModelUsageOut(
+                    model=row["model"] or "unknown",
+                    label=option.label if option else (row["model"] or "Unknown"),
+                    questions=row["questions"],
+                    input_tokens=row["input_tokens"] or 0,
+                    output_tokens=row["output_tokens"] or 0,
+                    estimated_cost_usd=None if cost is None else round(cost, 6),
+                )
+            )
+        return MyUsageOut(
+            day=now.date().isoformat(),
+            today_tokens=limits.user_spent_today(
+                user.id,
+                already_spent=conversations.tokens_since(
+                    owner=user.id, since=now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+                ),
+            ),
+            daily_budget=limits.user_daily_token_budget,
+            month_start=month_start.date().isoformat(),
+            questions=sum(item.questions for item in by_model),
+            input_tokens=sum(item.input_tokens for item in by_model),
+            output_tokens=sum(item.output_tokens for item in by_model),
+            estimated_cost_usd=round(sum(item.estimated_cost_usd or 0 for item in by_model), 6),
+            by_model=by_model,
+        )
+
     @router.post("/api/account/google/disconnect")
     def disconnect_google(user: User = Depends(sessions.current)) -> UserOut:
         return user_out(accounts.unlink_google(user.id))
@@ -232,7 +297,7 @@ def account_router(
         error: str | None = Query(default=None, max_length=200),
     ) -> RedirectResponse:
         """Where Google returns the browser. Signs in, or goes to the login page with a code."""
-        failure_page = "/login"
+        failure_page = "/login?"
         try:
             if google is None:
                 raise GoogleLoginError("google_off")
@@ -245,7 +310,7 @@ def account_router(
             if pending is None:
                 raise GoogleLoginError("expired")
             if pending.link_user_id is not None:
-                failure_page = "/account"
+                failure_page = "/account?tab=security&"
             tokens = await anyio.to_thread.run_sync(token_exchange, google, code, pending.code_verifier)
             identity = identity_from(tokens, google, nonce=pending.nonce)
             user = resolve_account(
@@ -253,7 +318,7 @@ def account_router(
             )
         except GoogleLoginError as exc:
             request.state.refused = f"google:{exc.code}"
-            response = RedirectResponse(f"{failure_page}?error={exc.code}", status_code=302)
+            response = RedirectResponse(f"{failure_page}error={exc.code}", status_code=302)
         else:
             response = RedirectResponse(safe_next(pending.next_path), status_code=302)
             if pending.link_user_id is None:

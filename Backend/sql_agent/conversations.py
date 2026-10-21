@@ -191,6 +191,32 @@ class ConversationStore:
             row = self._db.execute("SELECT tokens_spent FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
             return row["tokens_spent"] if row else 0
 
+    def tokens_since(self, *, owner: str | None, since: str) -> int:
+        """Model tokens the owner's stored answers used since `since` (an ISO time)."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COALESCE(SUM(t.input_tokens + t.output_tokens), 0) FROM turns t"
+                " JOIN conversations c ON c.id = t.conversation_id WHERE c.owner IS ? AND t.created_at >= ?",
+                (owner, since),
+            ).fetchone()
+            return row[0]
+
+    def usage_by_model(self, *, owner: str | None, since: str) -> list[dict]:
+        """The owner's answered questions since `since` (an ISO time), per model: count and tokens.
+
+        Read from the stored turns, so a deleted conversation no longer counts.
+        """
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT json_extract(t.answer_json, '$.model') AS model, COUNT(*) AS questions,"
+                " SUM(t.input_tokens) AS input_tokens, SUM(t.output_tokens) AS output_tokens"
+                " FROM turns t JOIN conversations c ON c.id = t.conversation_id"
+                " WHERE c.owner IS ? AND t.created_at >= ?"
+                " GROUP BY model ORDER BY questions DESC, model",
+                (owner, since),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def list(self, *, owner: str | None = None) -> list[ConversationSummary]:
         """The owner's conversations with at least one answer, most recently used first."""
         with self._lock:

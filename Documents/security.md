@@ -112,10 +112,11 @@ a sign the source text had been tampered with.
 - **The service speaks plain HTTP.** Session cookies are marked Secure by default, which
   browsers honour on `http://localhost` only. A deployed instance must sit behind HTTPS, such
   as a reverse proxy or a platform's own front end.
-- **The daily budget lives in memory.** A restart resets the day's spending. With several
-  server processes, each keeps its own ledger, so the effective budget multiplies, and each
-  would let the same conversation answer two questions at once. One process is the
-  supported deployment for now. A conversation's own budget is stored with it.
+- **The service's daily budget lives in memory.** A restart resets the service's spending
+  for the day. A person's daily budget and a conversation's budget are rebuilt from the
+  stored answers, so they survive a restart. With several server processes, each keeps its
+  own ledger, so the effective budgets multiply, and each would let the same conversation
+  answer two questions at once. One process is the supported deployment for now.
 - **Conversations are stored on disk, with result rows.** `Backend/data/conversations.db`
   holds every question, answer, SQL statement and the rows each query returned, so a
   reopened conversation can show its evidence. It is git-ignored and unencrypted. With real

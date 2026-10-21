@@ -268,3 +268,17 @@ def test_google_sign_in_is_off_without_credentials(sample_db_path):
     client = TestClient(create_app(agent, google=None), headers=CSRF)
     assert client.get("/api/auth/config").json()["google_enabled"] is False
     assert _start(client).headers["location"] == "/login?error=google_off"
+
+
+def test_a_failed_connection_returns_to_the_security_settings_with_a_code(google_app):
+    app, fake = google_app
+    owner = TestClient(app, headers=CSRF)
+    state = fake.authorize(_start(owner).headers["location"])
+    owner.get("/api/auth/google/callback", params={"code": "c1", "state": state}, follow_redirects=False)
+
+    other = TestClient(app, headers=CSRF)
+    other.post("/api/auth/register", json={"email": "bo@work.example", "password": "a long enough password"})
+    state = fake.authorize(_start(other, link="true", next="/account").headers["location"])
+    back = other.get("/api/auth/google/callback", params={"code": "c2", "state": state}, follow_redirects=False)
+    assert back.headers["location"] == "/account?tab=security&error=google_in_use"
+    assert other.get("/api/auth/me").json()["google_linked"] is False

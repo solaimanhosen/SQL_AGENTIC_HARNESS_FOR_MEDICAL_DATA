@@ -89,11 +89,19 @@ class SpendingLimits:
             user_daily_token_budget=settings.user_daily_token_budget,
         )
 
-    def reserve(self, conversation_id: str, *, already_spent: int = 0, user_id: str | None = None) -> Reservation:
+    def reserve(
+        self,
+        conversation_id: str,
+        *,
+        already_spent: int = 0,
+        user_id: str | None = None,
+        user_spent_today: int = 0,
+    ) -> Reservation:
         """Claim room for one run, or raise LimitExceeded. Every reservation must be settled.
 
         `already_spent` is what the conversation's stored turns used. It is the starting
         point for a conversation this ledger has not seen, such as one from before a restart.
+        `user_spent_today` does the same for a person: what their stored answers used today.
         """
         with self._lock:
             self._roll_over()
@@ -105,7 +113,7 @@ class SpendingLimits:
                 raise LimitExceeded(
                     "daily_budget", "The service has used its model budget for today. It resets at midnight UTC."
                 )
-            user_spent = self._users.get(user_id, 0) if user_id is not None else 0
+            user_spent = self._users.get(user_id, user_spent_today) if user_id is not None else 0
             if (
                 user_id is not None
                 and self.user_daily_token_budget is not None
@@ -145,11 +153,12 @@ class SpendingLimits:
                 self._conversations[reservation.conversation_id] += charged - reservation.tokens
             self._roll_over()
 
-    def user_spent_today(self, user_id: str) -> int:
-        """Tokens this person has spent or reserved today."""
+    def user_spent_today(self, user_id: str, *, already_spent: int = 0) -> int:
+        """Tokens this person has spent or reserved today. `already_spent` is the stored figure,
+        used when this ledger has not seen them today, such as after a restart."""
         with self._lock:
             self._roll_over()
-            return self._users.get(user_id, 0)
+            return self._users.get(user_id, already_spent)
 
     def usage(self) -> dict:
         with self._lock:

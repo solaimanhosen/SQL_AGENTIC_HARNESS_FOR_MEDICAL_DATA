@@ -913,3 +913,41 @@ def test_each_person_has_a_daily_budget_of_their_own(settings, db):
     response = ann.post("/api/ask", json={"question": "q"})
     assert response.status_code == 429 and response.json()["error"] == "user_budget"
     assert _second_user(ann).post("/api/ask", json={"question": "q"}).status_code == 200
+
+def test_your_usage_shows_today_against_your_budget_and_this_month_by_model(settings, db):
+    client, _ = _client(settings, db)
+    client.post("/api/ask", json={"question": "q1"})
+    client.post("/api/ask", json={"question": "q2", "model": "claude-haiku-5-5", "effort": "low"})
+    client.post("/api/ask", json={"question": "q3", "model": "claude-haiku-5-5"})
+
+    usage = client.get("/api/account/usage").json()
+    assert usage["today_tokens"] == 3 * 1350 and usage["daily_budget"] == settings.user_daily_token_budget
+    assert (usage["questions"], usage["input_tokens"], usage["output_tokens"]) == (3, 3600, 450)
+    by_model = {item["model"]: item for item in usage["by_model"]}
+    assert by_model["claude-haiku-5-5"]["questions"] == 2 and by_model["claude-haiku-5-5"]["label"] == "Haiku 5.5"
+    # 1,200 in and 150 out at Opus 5's $5 and $25 per million.
+    assert by_model["claude-opus-5"]["estimated_cost_usd"] == pytest.approx(0.00975)
+    assert usage["estimated_cost_usd"] == pytest.approx(0.00975 + 2 * (1200 * 0.10 + 150 * 0.50) / 1e6, abs=1e-4)
+
+    other = _second_user(client).get("/api/account/usage").json()
+    assert other["questions"] == 0 and other["by_model"] == [] and other["today_tokens"] == 0
+
+
+def test_a_restart_does_not_reset_a_person_s_daily_budget(settings, db):
+    store = ConversationStore()
+    first, _ = _client(settings, db, conversations=store)
+    first.post("/api/ask", json={"question": "q"})  # 1,350 tokens, stored with the answer
+
+    # A new service on the same store: its ledger starts empty, as after a restart.
+    limits = SpendingLimits(
+        max_concurrent_runs=4,
+        daily_token_budget=10**7,
+        conversation_token_budget=10**7,
+        user_daily_token_budget=61_000,
+        reserve_tokens=60_000,
+    )
+    again, agent = _client(settings, db, conversations=store, limits=limits)
+    assert again.get("/api/account/usage").json()["today_tokens"] == 1350
+    response = again.post("/api/ask", json={"question": "q"})
+    assert response.status_code == 429 and response.json()["error"] == "user_budget"
+    assert agent.questions == []
