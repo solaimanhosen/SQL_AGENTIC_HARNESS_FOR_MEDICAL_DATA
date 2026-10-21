@@ -1,0 +1,154 @@
+@let item = chart();
+@let geometry = layout();
+<figure class="chart">
+  <figcaption>
+    <span class="title">{{ item.title }}</span>
+    <button
+      type="button"
+      class="cite"
+      title="Show the query and the table this chart was drawn from"
+      (click)="source.emit(item.query_number)"
+    >
+      Query {{ item.query_number }}
+    </button>
+  </figcaption>
+
+  @if (multi()) {
+    <ul class="legend" [class.line]="item.kind === 'line'">
+      @for (series of item.series; track $index) {
+        <li><span class="key" [class]="seriesClass($index)"></span>{{ series.name }}</li>
+      }
+    </ul>
+  }
+
+  <div class="frame">
+    <svg
+      [attr.width]="geometry.width"
+      [attr.height]="geometry.height"
+      [attr.viewBox]="'0 0 ' + geometry.width + ' ' + geometry.height"
+      role="img"
+      [attr.aria-label]="description()"
+      tabindex="0"
+      (keydown)="step($event)"
+      (blur)="leave()"
+      (pointerleave)="leave()"
+    >
+      <g class="grid">
+        @for (tick of geometry.ticks; track tick.value) {
+          <line
+            [attr.x1]="geometry.left"
+            [attr.x2]="geometry.width - geometry.right"
+            [attr.y1]="tick.y"
+            [attr.y2]="tick.y"
+          />
+          <text class="tick" [attr.x]="geometry.left - 8" [attr.y]="tick.y + 4" text-anchor="end">
+            {{ tick.label }}
+          </text>
+        }
+      </g>
+
+      @if (active() !== null) {
+        @let slot = geometry.slots[active()!];
+        @if (item.kind === 'bar') {
+          <rect
+            class="wash"
+            [attr.x]="slot.x - slot.width / 2"
+            [attr.y]="geometry.top"
+            [attr.width]="slot.width"
+            [attr.height]="geometry.bottom - geometry.top"
+          />
+        } @else {
+          <line
+            class="crosshair"
+            [attr.x1]="slot.x"
+            [attr.x2]="slot.x"
+            [attr.y1]="geometry.top"
+            [attr.y2]="geometry.bottom"
+          />
+        }
+      }
+
+      <line
+        class="baseline"
+        [attr.x1]="geometry.left"
+        [attr.x2]="geometry.width - geometry.right"
+        [attr.y1]="geometry.zeroY"
+        [attr.y2]="geometry.zeroY"
+      />
+
+      @for (bar of geometry.bars; track $index) {
+        <path class="bar" [class]="seriesClass(bar.series)" [attr.d]="bar.path" />
+        @if (geometry.labelBars) {
+          <text
+            class="value"
+            [attr.x]="bar.x + bar.width / 2"
+            [attr.y]="bar.labelY"
+            text-anchor="middle"
+          >
+            {{ format(bar.value) }}
+          </text>
+        }
+      }
+
+      @for (line of geometry.lines; track line.series) {
+        <path class="line" [class]="seriesClass(line.series)" [attr.d]="line.path" />
+        @for (point of line.points; track point.index) {
+          @if (point.index === active() || line.points.length === 1) {
+            <circle
+              class="dot"
+              [class]="seriesClass(line.series)"
+              [attr.cx]="point.x"
+              [attr.cy]="point.y"
+              r="4"
+            />
+          }
+        }
+      }
+      @for (label of endLabels(); track label.series) {
+        <text class="value" [attr.x]="label.x + 7" [attr.y]="label.y + 4">
+          {{ label.text }}
+        </text>
+      }
+
+      @for (slot of geometry.slots; track $index) {
+        @if (slot.shown) {
+          <text class="tick" [attr.x]="slot.x" [attr.y]="geometry.bottom + 18" text-anchor="middle">
+            {{ short(slot.label) }}
+          </text>
+        }
+        <rect
+          class="hit"
+          [attr.x]="slot.x - slot.width / 2"
+          [attr.y]="geometry.top"
+          [attr.width]="slot.width"
+          [attr.height]="geometry.bottom - geometry.top + 24"
+          (pointerenter)="point($index)"
+        />
+      }
+    </svg>
+
+    @if (readout(); as shown) {
+      <div
+        class="readout"
+        role="status"
+        [style.left.px]="shown.left"
+        [style.right.px]="shown.right"
+      >
+        <p class="at">{{ shown.label }}</p>
+        @for (row of shown.rows; track row.series) {
+          <p class="row">
+            <span class="key" [class]="seriesClass(row.series)"></span>
+            <strong>{{ row.value }}</strong>
+            <span class="name">{{ row.name }}</span>
+          </p>
+        }
+      </div>
+    }
+  </div>
+  <p class="axis-note">
+    {{ item.x_label }}
+    @if (item.y_label) {
+      · {{ item.y_label }}
+    }
+  </p>
+</figure>

@@ -1,0 +1,210 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.chart {
+  margin: 1rem 0 0;
+}
+
+figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.title {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.cite {
+  padding: 0 0.4rem;
+  border: 0;
+  border-radius: 0.3rem;
+  background: var(--chip);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.cite:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.9rem;
+  margin: 0 0 0.3rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.key {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--c);
+}
+
+.legend.line .key,
+.readout .key {
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.frame {
+  position: relative;
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  overflow: visible;
+  font:
+    11px system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+svg:focus {
+  outline: none;
+}
+
+svg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 0.3rem;
+}
+
+.tick {
+  fill: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.value {
+  fill: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.grid line {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+}
+
+.baseline {
+  stroke: var(--chart-axis);
+  stroke-width: 1;
+}
+
+.bar {
+  fill: var(--c);
+}
+
+.line {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.dot {
+  fill: var(--c);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.hit {
+  fill: transparent;
+}
+
+.wash {
+  fill: var(--chip);
+}
+
+.crosshair {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+}
+
+.readout {
+  position: absolute;
+  top: 0;
+  min-width: 9rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--surface);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+.readout p {
+  margin: 0;
+}
+
+.readout .at {
+  color: var(--text-muted);
+}
+
+.readout .row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.readout strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.readout .name {
+  color: var(--text-muted);
+}
+
+.axis-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.s1 {
+  --c: var(--series-1);
+}
+.s2 {
+  --c: var(--series-2);
+}
+.s3 {
+  --c: var(--series-3);
+}
+.s4 {
+  --c: var(--series-4);
+}
+.s5 {
+  --c: var(--series-5);
+}
+.s6 {
+  --c: var(--series-6);
+}
+.s7 {
+  --c: var(--series-7);
+}
+.s8 {
+  --c: var(--series-8);
+}

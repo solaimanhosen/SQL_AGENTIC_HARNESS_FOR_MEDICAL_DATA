@@ -299,4 +299,97 @@ describe('AnswerView', () => {
     expect(element.querySelector('app-result-table')).toBeNull();
     expect(element.querySelector('.attempts .tool')).toBeNull();
   });
+  it('draws each chart, and its source button opens the query it was drawn from', async () => {
+    const trend: QueryRecord = {
+      ...answerFixture().queries[0],
+      number: 2,
+      sql: 'SELECT start FROM encounters',
+      row_count: 2,
+      columns: ['period', 'count', 'complete'],
+      rows: [
+        ['2026-07', 36, 'yes'],
+        ['2026-08', 22, 'no'],
+      ],
+    };
+    const { fixture, element } = await render({
+      queries: [answerFixture().queries[0], trend],
+      charts: [
+        {
+          kind: 'line',
+          title: 'Visits by month',
+          query_number: 2,
+          x_label: 'period',
+          y_label: 'count',
+          x: ['2026-07', '2026-08'],
+          series: [{ name: 'count', values: [36, 22] }],
+        },
+      ],
+    });
+    expect([...element.querySelectorAll('app-chart-view .title')].map(text)).toEqual([
+      'Visits by month',
+    ]);
+
+    element.querySelector<HTMLButtonElement>('app-chart-view .cite')!.click();
+    await fixture.whenStable();
+    const panel = element.querySelector('app-query-list details') as HTMLDetailsElement;
+    expect(panel.open).toBe(true);
+    expect(panel.querySelector('.query.lit')?.getAttribute('data-query')).toBe('2');
+  });
+
+  it('draws no chart for an answer stored before charts existed', async () => {
+    const { element } = await render({ charts: undefined });
+    expect(element.querySelector('app-chart-view')).toBeNull();
+  });
+
+  it('says which charts could not be drawn from the run', async () => {
+    const { element } = await render({
+      issues: {
+        any: true,
+        unknown_definitions: [],
+        missing_query_numbers: [],
+        unsupported_findings: [],
+        window_not_in_sql: null,
+        chart_problems: ["chart 'Ghost': query 9 did not run"],
+      },
+    });
+    expect([...element.querySelectorAll('.warning li')].map(text)).toEqual([
+      "Chart not drawn, chart 'Ghost': query 9 did not run",
+    ]);
+  });
+
+  it('labels an analysis with what was computed and says what it found', async () => {
+    const analysed: QueryRecord = {
+      ...answerFixture().queries[0],
+      sql: 'SELECT start FROM encounters',
+      row_count: 2,
+      elapsed_ms: 8,
+      columns: ['period', 'count', 'complete'],
+      rows: [
+        ['2026-07', 36, 'yes'],
+        ['2026-08', 22, 'no'],
+      ],
+      analysis: {
+        tool: 'trend',
+        label: 'trend by month over 58 rows',
+        parameters: { period: 'month' },
+        source_rows: 58,
+        summary: [
+          'Incomplete, so shown but not used for the direction: 2026-08.',
+          'Only 1 complete months.',
+        ],
+      },
+    };
+    const { fixture, element } = await render({ queries: [analysed] });
+    const panel = element.querySelector('app-query-list details') as HTMLDetailsElement;
+    panel.open = true;
+    panel.dispatchEvent(new Event('toggle'));
+    await fixture.whenStable();
+    expect(text(panel.querySelector('.query .head'))).toBe(
+      'Query 1 · computed a trend by month over 58 rows in 8 ms',
+    );
+    expect([...panel.querySelectorAll('.analysis li')].map(text)).toEqual(
+      analysed.analysis!.summary,
+    );
+    expect(panel.querySelectorAll('app-result-table tbody tr').length).toBe(2);
+  });
 });

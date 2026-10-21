@@ -32,6 +32,10 @@
       </section>
     }
 
+    @for (chart of item.charts ?? []; track $index) {
+      <app-chart-view [chart]="chart" (source)="showQuery($event)" />
+    }
+
     <dl class="facts">
       <div>
         <dt>Time window</dt>
@@ -116,6 +120,9 @@
         }
         @for (statement of item.issues.unsupported_findings; track $index) {
           <li>No query cited for: {{ statement }}</li>
+        }
+        @for (problem of item.issues.chart_problems ?? []; track $index) {
+          <li>Chart not drawn, {{ problem }}</li>
         }
       </ul>
     </section>

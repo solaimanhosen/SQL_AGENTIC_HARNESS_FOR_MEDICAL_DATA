@@ -2,6 +2,7 @@ import { Component, computed, inject, input, viewChild } from '@angular/core';
 
 import { Answer, DefinitionStatus, Step } from '../api/types';
 import { Exporter, answerJson, fileStem } from './export';
+import { ChartView } from './chart-view';
 import { QueryList } from './query-list';
 import { StepLog } from './step-log';
 
@@ -21,7 +22,7 @@ const STATUS_LABELS: Record<DefinitionStatus, string> = {
  */
 @Component({
   selector: 'app-answer-view',
-  imports: [QueryList, StepLog],
+  imports: [ChartView, QueryList, StepLog],
   templateUrl: './answer-view.html',
   styleUrl: './answer-view.css',
 })
