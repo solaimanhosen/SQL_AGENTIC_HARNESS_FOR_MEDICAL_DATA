@@ -2,11 +2,12 @@
 
 The run log in runlog.py records what each answered question did. This log records who
 asked what of the service and how it went, including the requests that were refused: a
-missing token, an oversized body, a spending limit. Together they answer both "what did the
-agent do" and "what was the service asked to do".
+missing session, an oversized body, a request from another site, a spending limit.
+Together they answer both "what did the agent do" and "what was the service asked to do".
 
-No request or response bodies are written, and neither is the Authorization header. The
-question already lives in the run log, keyed by conversation.
+No request or response bodies are written, and neither are cookies. A signed-in request
+names its user by id, never by email. The question already lives in the run log, keyed by
+conversation.
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ class RequestLogMiddleware:
                     "status": status,
                     "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
                     "client": client[0] if client else None,
-                    "authenticated": bool(scope.get("state", {}).get("authenticated", False)),
+                    "user_id": scope.get("state", {}).get("user_id"),
                     "refused": scope.get("state", {}).get("refused"),
                 }
             )

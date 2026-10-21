@@ -19,12 +19,12 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
-import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .agent import MAX_HISTORY_TURNS, Turn
+from .appdb import SCHEMA, SCHEMA_VERSION, AppDatabase, NewerSchema  # noqa: F401  (re-exported)
 
 DEFAULT_MAX_CONVERSATIONS = 1_000
 TITLE_CHARS = 60
@@ -32,56 +32,12 @@ MAX_TITLE_CHARS = 100
 MAX_SEARCH_CHARS = 200
 SEARCH_LIMIT = 50
 
-# The schema as v3.0.0 created it. A file it wrote has user_version 0; this is version 1.
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS conversations (
-    id TEXT PRIMARY KEY,
-    owner TEXT,
-    title TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    turn_count INTEGER NOT NULL DEFAULT 0,
-    tokens_spent INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS turns (
-    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    turn INTEGER NOT NULL,
-    question TEXT NOT NULL,
-    answer_json TEXT NOT NULL,
-    steps_json TEXT NOT NULL,
-    context_answer TEXT NOT NULL,
-    context_sql_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (conversation_id, turn)
-);
-CREATE INDEX IF NOT EXISTS conversations_by_use ON conversations(updated_at);
-"""
-
-# Each entry takes the schema one version further: the first gives version 2. They only
-# ever add, so a file written by any earlier version upgrades in place when it is opened.
-# Never edit one that has shipped; add a new one.
-MIGRATIONS: tuple[str, ...] = (
-    # 2: pinning. NULL means not pinned; otherwise when it was pinned, newest pin first.
-    "ALTER TABLE conversations ADD COLUMN pinned_at TEXT;",
-    # 3: the model and effort of the latest answer, so reopening restores the picker.
-    "ALTER TABLE conversations ADD COLUMN last_model TEXT;"
-    " ALTER TABLE conversations ADD COLUMN last_effort TEXT;",
-)
-SCHEMA_VERSION = 1 + len(MIGRATIONS)
-
-
 class UnknownConversation(KeyError):
     """The conversation was deleted, was never started, or was removed to make room."""
 
 
 class ConversationBusy(RuntimeError):
     """The conversation is still answering an earlier question."""
-
-
-class NewerSchema(RuntimeError):
-    """The file was written by a newer version of this program, which this one must not alter."""
 
 
 @dataclass(frozen=True)
@@ -120,73 +76,54 @@ def title_from(question: str) -> str:
 
 
 class ConversationStore:
-    """Thread-safe and bounded: the least recently used conversation is removed first."""
+    """Thread-safe and bounded per owner: each owner's least recently used conversation goes first.
+
+    Every method that finds a conversation takes its `owner`, a user id. Another owner's
+    conversation is reported as unknown, exactly like one that does not exist, so its
+    existence is not revealed. `owner=None` means conversations from before accounts, which
+    have none.
+    """
 
     def __init__(
         self,
         path: Path | None = None,
         *,
+        database: AppDatabase | None = None,
         max_conversations: int = DEFAULT_MAX_CONVERSATIONS,
         max_turns: int = MAX_HISTORY_TURNS,
     ):
-        self.path = path
+        self.database = database or AppDatabase(path)
+        self.path = self.database.path
         self.max_conversations = max_conversations
         self.max_turns = max_turns
-        self._lock = threading.Lock()
+        self._lock = self.database.lock
+        self._db = self.database.connection
         self._busy: set[str] = set()
         self._clock = datetime.min.replace(tzinfo=timezone.utc)
-        if path is not None:
-            path.parent.mkdir(parents=True, exist_ok=True)
-        # One connection, used only while the lock is held, so any thread may call in.
-        self._db = sqlite3.connect(path or ":memory:", check_same_thread=False, isolation_level=None)
-        self._db.row_factory = sqlite3.Row
-        self._db.execute("PRAGMA foreign_keys = ON")
-        if path is not None:
-            self._db.execute("PRAGMA journal_mode = WAL")
-        self._migrate()
-
-    def _migrate(self) -> None:
-        """Create the tables, or bring a file from an earlier version up to date."""
-        version = self._db.execute("PRAGMA user_version").fetchone()[0]
-        if version > SCHEMA_VERSION:
-            raise NewerSchema(
-                f"{self.path} is at schema version {version}, newer than this program's"
-                f" {SCHEMA_VERSION}. Use the newer program, or another conversations file."
-            )
-        self._db.executescript(SCHEMA)
-        for number, script in enumerate(MIGRATIONS, start=2):
-            if max(version, 1) < number:
-                # One transaction per step, so a failed step leaves the file at the last good one.
-                try:
-                    self._db.executescript(f"BEGIN; {script} PRAGMA user_version = {number}; COMMIT;")
-                except sqlite3.Error:
-                    if self._db.in_transaction:
-                        self._db.execute("ROLLBACK")
-                    raise
 
     def schema_version(self) -> int:
-        with self._lock:
-            return self._db.execute("PRAGMA user_version").fetchone()[0]
+        return self.database.schema_version()
 
-    def begin(self, conversation_id: str | None) -> tuple[str, tuple[Turn, ...], int]:
+    def begin(self, conversation_id: str | None, *, owner: str | None = None) -> tuple[str, tuple[Turn, ...], int]:
         """Claim a conversation for one question. Returns its id, its turns and the turn number.
 
-        With no id, a new conversation is started. Every call must be matched by `finish`.
+        With no id, a new conversation is started for `owner`. Every call must be matched by
+        `finish`.
         """
         with self._lock:
             now = self._now()
             if conversation_id is None:
                 conversation_id = secrets.token_hex(16)
                 self._db.execute(
-                    "INSERT INTO conversations (id, created_at, updated_at) VALUES (?, ?, ?)",
-                    (conversation_id, now, now),
+                    "INSERT INTO conversations (id, owner, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (conversation_id, owner, now, now),
                 )
-            row = self._row(conversation_id)
+            row = self._row(conversation_id, owner)
             if conversation_id in self._busy:
                 raise ConversationBusy(conversation_id)
             self._busy.add(conversation_id)
             self._db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conversation_id))
-            self._evict()
+            self._evict(owner)
             recent = self._db.execute(
                 "SELECT question, context_answer, context_sql_json FROM turns"
                 " WHERE conversation_id = ? ORDER BY turn DESC LIMIT ?",
@@ -254,15 +191,16 @@ class ConversationStore:
             row = self._db.execute("SELECT tokens_spent FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
             return row["tokens_spent"] if row else 0
 
-    def list(self) -> list[ConversationSummary]:
-        """Conversations with at least one answer, most recently used first."""
+    def list(self, *, owner: str | None = None) -> list[ConversationSummary]:
+        """The owner's conversations with at least one answer, most recently used first."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT * FROM conversations WHERE turn_count > 0 ORDER BY updated_at DESC"
+                "SELECT * FROM conversations WHERE owner IS ? AND turn_count > 0 ORDER BY updated_at DESC",
+                (owner,),
             ).fetchall()
             return [_summary(row) for row in rows]
 
-    def search(self, text: str) -> list[ConversationSummary]:
+    def search(self, text: str, *, owner: str | None = None) -> list[ConversationSummary]:
         """Conversations whose title or any question contains the text, most recently used first.
 
         Matching ignores case for English letters. The text is matched literally: % and _ are
@@ -270,20 +208,21 @@ class ConversationStore:
         """
         words = " ".join(text.split())[:MAX_SEARCH_CHARS]
         if not words:
-            return self.list()
+            return self.list(owner=owner)
         pattern = "%" + words.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         with self._lock:
             rows = self._db.execute(
-                "SELECT * FROM conversations c WHERE c.turn_count > 0 AND (c.title LIKE :p ESCAPE '\\'"
+                "SELECT * FROM conversations c WHERE c.owner IS :owner AND c.turn_count > 0"
+                " AND (c.title LIKE :p ESCAPE '\\'"
                 " OR EXISTS (SELECT 1 FROM turns t WHERE t.conversation_id = c.id AND t.question LIKE :p ESCAPE '\\'))"
                 " ORDER BY c.updated_at DESC LIMIT :limit",
-                {"p": pattern, "limit": SEARCH_LIMIT},
+                {"p": pattern, "limit": SEARCH_LIMIT, "owner": owner},
             ).fetchall()
             return [_summary(row) for row in rows]
 
-    def get(self, conversation_id: str) -> StoredConversation:
+    def get(self, conversation_id: str, *, owner: str | None = None) -> StoredConversation:
         with self._lock:
-            row = self._row(conversation_id)
+            row = self._row(conversation_id, owner)
             turns = self._db.execute(
                 "SELECT turn, question, created_at, answer_json, steps_json FROM turns"
                 " WHERE conversation_id = ? ORDER BY turn",
@@ -304,19 +243,19 @@ class ConversationStore:
                 ),
             )
 
-    def rename(self, conversation_id: str, title: str) -> ConversationSummary:
+    def rename(self, conversation_id: str, title: str, *, owner: str | None = None) -> ConversationSummary:
         title = " ".join(title.split())[:MAX_TITLE_CHARS]
         if not title:
             raise ValueError("A title cannot be empty.")
         with self._lock:
-            self._row(conversation_id)
+            self._row(conversation_id, owner)
             self._db.execute("UPDATE conversations SET title = ? WHERE id = ?", (title, conversation_id))
-            return _summary(self._row(conversation_id))
+            return _summary(self._row(conversation_id, owner))
 
-    def pin(self, conversation_id: str, pinned: bool) -> ConversationSummary:
+    def pin(self, conversation_id: str, pinned: bool, *, owner: str | None = None) -> ConversationSummary:
         """Pin or unpin. Pinning again keeps the original time; neither counts as use."""
         with self._lock:
-            self._row(conversation_id)
+            self._row(conversation_id, owner)
             if pinned:
                 self._db.execute(
                     "UPDATE conversations SET pinned_at = COALESCE(pinned_at, ?) WHERE id = ?",
@@ -324,26 +263,33 @@ class ConversationStore:
                 )
             else:
                 self._db.execute("UPDATE conversations SET pinned_at = NULL WHERE id = ?", (conversation_id,))
-            return _summary(self._row(conversation_id))
+            return _summary(self._row(conversation_id, owner))
 
-    def delete(self, conversation_id: str) -> None:
+    def delete(self, conversation_id: str, *, owner: str | None = None) -> None:
         """Remove the conversation and its turns. One that is answering cannot be removed."""
         with self._lock:
-            self._row(conversation_id)
+            self._row(conversation_id, owner)
             if conversation_id in self._busy:
                 raise ConversationBusy(conversation_id)
             self._db.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
 
-    def close(self) -> None:
+    def claim_unowned(self, owner: str) -> int:
+        """Give every conversation from before accounts to this user. Returns how many."""
         with self._lock:
-            self._db.close()
+            return self._db.execute("UPDATE conversations SET owner = ? WHERE owner IS NULL", (owner,)).rowcount
+
+    def close(self) -> None:
+        self.database.close()
 
     def __len__(self) -> int:
         with self._lock:
             return self._db.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
 
-    def _row(self, conversation_id: str) -> sqlite3.Row:
-        row = self._db.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+    def _row(self, conversation_id: str, owner: str | None) -> sqlite3.Row:
+        # Someone else's conversation is reported exactly like one that does not exist.
+        row = self._db.execute(
+            "SELECT * FROM conversations WHERE id = ? AND owner IS ?", (conversation_id, owner)
+        ).fetchone()
         if row is None:
             raise UnknownConversation(conversation_id)
         return row
@@ -353,13 +299,15 @@ class ConversationStore:
         self._clock = max(datetime.now(timezone.utc), self._clock + timedelta(microseconds=1))
         return self._clock.isoformat(timespec="microseconds")
 
-    def _evict(self) -> None:
-        excess = self._db.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] - self.max_conversations
+    def _evict(self, owner: str | None) -> None:
+        """Keep each owner within the cap, so nobody's conversations push out anyone else's."""
+        count = self._db.execute("SELECT COUNT(*) FROM conversations WHERE owner IS ?", (owner,)).fetchone()[0]
+        excess = count - self.max_conversations
         if excess <= 0:
             return
         # Unpinned conversations go first, least recently used first; pinned ones only after.
         for (conversation_id,) in self._db.execute(
-            "SELECT id FROM conversations ORDER BY pinned_at IS NOT NULL, updated_at"
+            "SELECT id FROM conversations WHERE owner IS ? ORDER BY pinned_at IS NOT NULL, updated_at", (owner,)
         ).fetchall():
             if excess <= 0:
                 break

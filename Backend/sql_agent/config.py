@@ -36,7 +36,8 @@ DEFAULT_MAX_CONCURRENT_RUNS = 4
 DEFAULT_DAILY_TOKEN_BUDGET = 5_000_000
 DEFAULT_CONVERSATION_TOKEN_BUDGET = 1_000_000
 DEFAULT_CONVERSATIONS_PATH = "data/conversations.db"
-MIN_API_TOKEN_CHARS = 32
+DEFAULT_USER_DAILY_TOKEN_BUDGET = 1_000_000
+DEFAULT_PUBLIC_URL = "http://localhost:4200"
 
 MAX_OUTPUT_TOKENS = 128_000
 AS_OF_KEYWORDS = ("latest", "today")
@@ -83,6 +84,14 @@ class Settings:
     """Whether a stored answer keeps the rows its queries returned, or only what ran."""
     analysis_max_rows: int = DEFAULT_ANALYSIS_MAX_ROWS
     """Rows an analytics tool may read. Only its computed table reaches the model."""
+    user_daily_token_budget: int = DEFAULT_USER_DAILY_TOKEN_BUDGET
+    """Model tokens one person may spend per UTC day, beside the service's own budget."""
+    secure_cookies: bool = True
+    """Whether the session cookie is sent only over HTTPS. Off only for plain-HTTP local use."""
+    public_url: str = DEFAULT_PUBLIC_URL
+    """The address people open the application at. Google returns them to it after sign-in."""
+    registration_open: bool = True
+    """Whether anyone may create an account, until an admin changes it in the application."""
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -128,27 +137,30 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
             1,
             1_000_000,
         ),
+        user_daily_token_budget=_parse_int(
+            "SQL_AGENT_USER_DAILY_TOKEN_BUDGET",
+            env.get("SQL_AGENT_USER_DAILY_TOKEN_BUDGET", str(DEFAULT_USER_DAILY_TOKEN_BUDGET)),
+            100_000,
+            10**10,
+        ),
+        secure_cookies=_parse_bool("SQL_AGENT_SECURE_COOKIES", env.get("SQL_AGENT_SECURE_COOKIES", "true")),
+        public_url=_parse_public_url(env.get("SQL_AGENT_PUBLIC_URL", DEFAULT_PUBLIC_URL)),
+        registration_open=_parse_registration(env.get("SQL_AGENT_REGISTRATION", "open")),
     )
 
 
-def load_api_token(env: Mapping[str, str] | None = None) -> str | None:
-    """The shared token the HTTP service requires, or None when none is set.
+def _parse_public_url(raw: str) -> str:
+    value = raw.strip().rstrip("/")
+    if not value.startswith(("http://", "https://")) or " " in value:
+        raise ConfigError(f"SQL_AGENT_PUBLIC_URL must be an http or https address; got {raw!r}")
+    return value
 
-    Like the Anthropic key, it is kept out of Settings so printing or logging Settings can
-    never leak it.
-    """
-    if env is None:
-        load_dotenv(ENV_FILE, override=False)
-        env = os.environ
-    token = env.get("SQL_AGENT_API_TOKEN", "").strip()
-    if not token:
-        return None
-    if len(token) < MIN_API_TOKEN_CHARS:
-        raise ConfigError(
-            f"SQL_AGENT_API_TOKEN must be at least {MIN_API_TOKEN_CHARS} characters. "
-            'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(32))"'
-        )
-    return token
+
+def _parse_registration(raw: str) -> bool:
+    value = raw.strip().lower()
+    if value not in ("open", "closed"):
+        raise ConfigError(f"SQL_AGENT_REGISTRATION must be open or closed; got {raw!r}")
+    return value == "open"
 
 
 def _parse_model(raw: str) -> str:

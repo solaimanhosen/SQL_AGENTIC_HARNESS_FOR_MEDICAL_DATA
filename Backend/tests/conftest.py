@@ -2,6 +2,14 @@ import sqlite3
 
 import pytest
 
+from sql_agent import passwords
+
+
+@pytest.fixture(autouse=True)
+def quick_password_hashing(monkeypatch):
+    """Real scrypt, at a cost small enough that tests that sign in stay fast."""
+    monkeypatch.setattr(passwords, "COST", (2**10, 8, 1))
+
 
 @pytest.fixture(scope="session")
 def sample_db_path(tmp_path_factory):

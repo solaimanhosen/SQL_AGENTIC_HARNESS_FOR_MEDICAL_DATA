@@ -87,15 +87,36 @@ The web interface calls an HTTP service that wraps the same `SqlAgent.answer` me
 command line uses, so the two cannot drift apart.
 
 ```bash
+.venv/bin/python -m sql_agent.users create you@example.org --admin --claim-unowned   # once
 .venv/bin/python -m sql_agent.serve                  # http://127.0.0.1:8000, docs at /docs
 curl -s localhost:8000/api/health
-curl -s -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \
-     -d '{"question": "How many patients have diabetes?"}'
 ```
+
+Every endpoint except health and signing in needs an account's session, so the easiest way
+to ask is the web interface. From the command line, sign in first and keep the cookie:
+
+```bash
+curl -s -c jar -X POST localhost:8000/api/auth/login -H 'X-Requested-With: sql-agent' \
+     -H 'Content-Type: application/json' -d '{"email": "you@example.org", "password": "..."}'
+curl -s -b jar -X POST localhost:8000/api/ask -H 'X-Requested-With: sql-agent' \
+     -H 'Content-Type: application/json' -d '{"question": "How many patients have diabetes?"}'
+```
+
+With the default `SQL_AGENT_SECURE_COOKIES=true`, curl keeps the cookie only over HTTPS or
+for `localhost`; set it to `false` for plain HTTP on this machine.
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/health` | Whether the database is readable, the model and the as-of date. No model call. |
+| GET | `/api/health` | Whether the database is readable, the model and the as-of date. No model call. No session needed. |
+| GET | `/api/auth/config` | Whether registration is open and Google sign-in is on. No session needed. |
+| POST | `/api/auth/register` | `{email, password, name}`: make an account and sign in. 403 when registration is closed, 409 when the email is taken. |
+| POST | `/api/auth/login` | `{email, password}`: sign in. A wrong password and an unknown email get the same 401. Throttled. |
+| POST | `/api/auth/logout` | End this session. |
+| GET | `/api/auth/me` | The signed-in person: email, name, role, sign-in methods, default model. |
+| GET | `/api/auth/google/start`, `/callback` | Sign in with Google, or `?link=true` to connect it to the signed-in account. See ADR 0007. |
+| PATCH | `/api/account` | Change your name, or default model and effort. |
+| POST | `/api/account/password` | `{current, new}`: change your password. |
+| GET, DELETE, POST | `/api/account/sessions`, `/{id}`, `/revoke-others` | List your sessions and sign them out. |
 | GET | `/api/schema` | The documented tables and columns. Identity columns never appear. |
 | GET | `/api/definitions` | Every shared definition with its confirmation status. |
 | GET | `/api/usage` | Questions running now and tokens spent today against the daily budget. |
@@ -154,24 +175,44 @@ answer is a 422, and a failure at the Anthropic API is a 502 or 503. An unknown 
 deleted conversation is a 404. The agent runs in a worker thread, so a slow question does not
 block other requests.
 
-### Access and limits
+### Accounts, access and limits
 
-Set `SQL_AGENT_API_TOKEN` in `Backend/.env` to require a shared token on every endpoint
-except health. Clients send `Authorization: Bearer <token>`. Without a token the service is
-open, so `serve` refuses a `--host` other than this machine. Generate a token with:
+People sign in with an account (ADR 0006), by email and password or with Google (ADR 0007).
+Each sees only their own conversations; another person's is a 404. There are two roles,
+`user` and `admin`. Accounts are managed from the command line on the machine that runs the
+service:
 
 ```bash
-.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"
+.venv/bin/python -m sql_agent.users create you@example.org --admin --claim-unowned
+.venv/bin/python -m sql_agent.users list
+.venv/bin/python -m sql_agent.users set-role someone@example.org admin
+.venv/bin/python -m sql_agent.users disable someone@example.org
+.venv/bin/python -m sql_agent.users reset-password someone@example.org
+.venv/bin/python -m sql_agent.users registration closed
 ```
+
+Passwords are typed at a hidden prompt. `--claim-unowned` gives the conversations from before
+accounts to that account; until then nobody sees them. An account made here counts as having
+a verified email, so its owner may later sign in with Google on the same address.
+
+The session is an HttpOnly cookie. A request that changes something must also send
+`X-Requested-With: sql-agent`, or it is refused as cross-site. With
+`SQL_AGENT_SECURE_COOKIES=false`, `serve` refuses a `--host` other than this machine.
+
+To switch on Google sign-in, create an OAuth client of type Web application in Google Cloud
+Console with the redirect URI `<SQL_AGENT_PUBLIC_URL>/api/auth/google/callback`, which is
+`http://localhost:4200/api/auth/google/callback` in development, and set
+`SQL_AGENT_GOOGLE_CLIENT_ID` and `SQL_AGENT_GOOGLE_CLIENT_SECRET` in `Backend/.env`.
 
 A question is refused with a 429, before the model is called, when:
 - too many are already running (`too_many_runs`, with a `Retry-After` header);
 - the day's token budget is spent (`daily_budget`), reset at midnight UTC;
+- your own daily budget is spent (`user_budget`);
 - the conversation's token budget is spent (`conversation_budget`), so start a new one.
 
 A question still running counts against both budgets with a 60,000 token reservation until
 it finishes. Request bodies over 16 KB get a 413. Every request, including a refused one, is
-appended to `logs/requests.jsonl` without its body or token. Only the origins in
+appended to `logs/requests.jsonl` with the user's id, and without its body or cookies. Only the origins in
 `SQL_AGENT_CORS_ORIGINS` may call the service from a browser. The daily budget and the
 record of which conversations are answering live in memory, so run one server process. A
 conversation's own spending is stored with it. See `Documents/security.md` for what remains a risk.
@@ -279,7 +320,11 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `SQL_AGENT_AS_OF_DATE` | `latest` | Anchor for "last N months": `latest`, `today` or `YYYY-MM-DD`. |
 | `SQL_AGENT_REFUSAL_FALLBACK` | `true` | Retry a declined request on a fallback model in the same call. |
 | `SQL_AGENT_CORS_ORIGINS` | `http://localhost:4200` | Comma-separated browser origins allowed to call the service. |
-| `SQL_AGENT_API_TOKEN` | none | Shared bearer token for the service, at least 32 characters. Never commit it. |
+| `SQL_AGENT_SECURE_COOKIES` | `true` | Send the session cookie over HTTPS only. `false` is for plain HTTP on this machine. |
+| `SQL_AGENT_REGISTRATION` | `open` | Whether anyone may sign up, until an admin changes it. |
+| `SQL_AGENT_USER_DAILY_TOKEN_BUDGET` | `1000000` | Model tokens one person may spend per UTC day. |
+| `SQL_AGENT_PUBLIC_URL` | `http://localhost:4200` | The address people open. Google returns them here. |
+| `SQL_AGENT_GOOGLE_CLIENT_ID`, `_SECRET` | none | Google sign-in, off unless both are set. The secret is never logged; never commit it. |
 | `SQL_AGENT_MAX_CONCURRENT_RUNS` | `4` | Questions the service answers at once. More are refused. |
 | `SQL_AGENT_DAILY_TOKEN_BUDGET` | `5000000` | Model tokens the service may spend per UTC day. |
 | `SQL_AGENT_CONVERSATION_TOKEN_BUDGET` | `1000000` | Model tokens one conversation may spend. |
@@ -298,6 +343,11 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `main.py` | Command line entry point for asking a question. |
 | `sql_agent/service.py` | The HTTP service, a thin layer over the agent. |
 | `sql_agent/serve.py` | Runs the service. |
+| `sql_agent/appdb.py` | The application database and its schema migrations. |
+| `sql_agent/accounts.py`, `passwords.py` | Accounts, sessions and pending Google sign-ins; scrypt password hashing. |
+| `sql_agent/auth.py`, `account_routes.py` | The session cookie, the cross-site check, the sign-in throttle, and the account routes. |
+| `sql_agent/google_login.py` | Google sign-in and the rules for linking an account (ADR 0007). |
+| `sql_agent/users.py` | Manage accounts from the command line. |
 | `sql_agent/conversations.py` | Stores conversations in SQLite: every answer for the interface, and the recent turns a follow-up is shown. |
 | `sql_agent/limits.py` | Concurrency and token budgets for the service. |
 | `sql_agent/requestlog.py` | Logs each HTTP request. |

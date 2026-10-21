@@ -282,3 +282,53 @@ def test_the_latest_answer_s_model_and_effort_are_remembered():
     store.begin(conversation_id)
     store.finish(conversation_id, None)  # a failed run changes nothing
     assert store.list()[0].last_model == "claude-haiku-5-5"
+
+
+def test_a_v3_file_also_gets_accounts_and_its_conversations_wait_for_an_owner(tmp_path):
+    path = tmp_path / "conversations.db"
+    old = sqlite3.connect(path)
+    old.executescript(SCHEMA)
+    old.execute(
+        "INSERT INTO conversations (id, title, created_at, updated_at, turn_count) VALUES (?, ?, ?, ?, 1)",
+        ("a" * 32, "Old question", "2026-10-01T00:00:00+00:00", "2026-10-01T00:00:00+00:00"),
+    )
+    old.commit()
+    old.close()
+
+    store = ConversationStore(path)
+    tables = {row[0] for row in store._db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"users", "sessions", "oauth_states", "app_settings"} <= tables
+    assert [summary.id for summary in store.list()] == ["a" * 32], "unowned until claimed"
+    assert store.list(owner="admin-id") == []
+    assert store.claim_unowned("admin-id") == 1
+    assert [summary.id for summary in store.list(owner="admin-id")] == ["a" * 32]
+    assert store.list() == []
+
+
+def test_another_owner_s_conversation_is_reported_as_unknown():
+    store = ConversationStore()
+    mine = _answered(store)
+    store.claim_unowned("ann")
+    for action in (
+        lambda: store.get(mine, owner="bo"),
+        lambda: store.rename(mine, "x", owner="bo"),
+        lambda: store.pin(mine, True, owner="bo"),
+        lambda: store.delete(mine, owner="bo"),
+        lambda: store.begin(mine, owner="bo"),
+    ):
+        with pytest.raises(UnknownConversation):
+            action()
+    assert store.get(mine, owner="ann").summary.id == mine
+
+
+def test_the_cap_is_per_owner_so_nobody_pushes_out_anyone_else():
+    store = ConversationStore(max_conversations=1)
+    ann, _, _ = store.begin(None, owner="ann")
+    store.finish(ann, _turn(1))
+    bo, _, _ = store.begin(None, owner="bo")
+    store.finish(bo, _turn(1))
+    assert len(store) == 2, "Bo's first conversation did not evict Ann's"
+    newer, _, _ = store.begin(None, owner="bo")
+    store.finish(newer, _turn(1))
+    assert [s.id for s in store.list(owner="bo")] == [newer]
+    assert [s.id for s in store.list(owner="ann")] == [ann]

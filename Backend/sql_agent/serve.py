@@ -5,9 +5,10 @@ Run from the Backend folder:
     .venv/bin/python -m sql_agent.serve                 # http://127.0.0.1:8000
     .venv/bin/python -m sql_agent.serve --port 8080
 
-The interactive API documentation is served at /docs. Without SQL_AGENT_API_TOKEN the
-service is open, so it refuses to listen anywhere but this machine. With a token, clients
-send it as a bearer token and --host may name another address.
+The interactive API documentation is served at /docs. Every endpoint except health and
+sign-in needs an account's session. Session cookies travel over HTTPS only unless
+SQL_AGENT_SECURE_COOKIES=false, which is for plain-HTTP use on this machine, so with it off
+the service refuses to listen anywhere else.
 """
 
 from __future__ import annotations
@@ -17,8 +18,9 @@ import sys
 
 import uvicorn
 
-from .config import ConfigError, load_api_token, load_settings
+from .config import ConfigError, load_settings
 from .conversations import NewerSchema
+from .google_login import load_google_config
 from .service import create_app
 
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -32,24 +34,28 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         settings = load_settings()
-        api_token = load_api_token()
     except ConfigError as exc:
         print(f"Settings error: {exc}", file=sys.stderr)
         return 1
     if not settings.db_path.exists():
         print(f"No database at {settings.db_path}. Build it with: python -m sql_agent.load_data", file=sys.stderr)
         return 1
-    if args.host not in LOCAL_HOSTS and api_token is None:
+    if args.host not in LOCAL_HOSTS and not settings.secure_cookies:
         print(
-            f"Refusing to listen on {args.host} without SQL_AGENT_API_TOKEN. Anyone who could "
-            "reach it could ask questions at your expense. Set a token in Backend/.env first.",
+            f"Refusing to listen on {args.host} with SQL_AGENT_SECURE_COOKIES=false. Session cookies "
+            "would cross the network unencrypted. Serve it behind HTTPS with secure cookies on.",
             file=sys.stderr,
         )
         return 1
 
-    print(f"Access token {'required' if api_token else 'not set, open to this machine only'}.", file=sys.stderr)
+    google = load_google_config(settings.public_url) is not None
+    print(
+        f"Accounts: registration {'open' if settings.registration_open else 'closed'} by default, "
+        f"Google sign-in {'on' if google else 'off'}, cookies {'HTTPS only' if settings.secure_cookies else 'plain HTTP allowed'}.",
+        file=sys.stderr,
+    )
     try:
-        app = create_app(api_token=api_token)
+        app = create_app()
     except NewerSchema as exc:
         print(f"Conversations file error: {exc}", file=sys.stderr)
         return 1

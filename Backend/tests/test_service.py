@@ -7,6 +7,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from sql_agent.accounts import AccountStore
 from sql_agent.agent import AgentError, AgentResult
 from sql_agent.answer import AnswerIssues, ChartRequest, Draft, Finding, StructuredAnswer, TimeWindow
 from sql_agent.charts import resolve_charts
@@ -91,6 +92,7 @@ def settings(sample_db_path, tmp_path):
         log_path=tmp_path / "runs.jsonl",
         request_log_path=tmp_path / "requests.jsonl",
         conversations_path=None,
+        secure_cookies=False,
     )
 
 
@@ -99,9 +101,37 @@ def db(sample_db_path):
     return ReadOnlyDatabase(sample_db_path, max_rows=10, timeout_seconds=5)
 
 
-def _client(settings, db, *, conversations=None, limits=None, api_token=None, **kwargs):
+TEST_EMAIL = "ann@example.org"
+TEST_PASSWORD = "a long enough password"
+# What the interface sends with every request, so the cross-site check lets it through.
+CSRF = {"X-Requested-With": "sql-agent"}
+
+
+def _client(settings, db, *, conversations=None, limits=None, signed_in=True, admin=False, **kwargs):
     agent = StubAgent(settings, db, **kwargs)
-    return TestClient(create_app(agent, conversations, limits=limits, api_token=api_token)), agent
+    client = TestClient(create_app(agent, conversations, limits=limits, google=None), headers=CSRF)
+    if signed_in:
+        _sign_in(client, admin=admin)
+    return client, agent
+
+
+def _sign_in(client, email=TEST_EMAIL, *, admin=False):
+    """Make the account if it is new, then sign in through the real route, as a browser would."""
+    accounts = client.app.state.accounts
+    user = accounts.find_by_email(email) or accounts.create_user(email, password=TEST_PASSWORD)
+    if admin:
+        accounts.set_role(user.id, "admin")
+    response = client.post("/api/auth/login", json={"email": email, "password": TEST_PASSWORD})
+    assert response.status_code == 200, response.text
+    client.user_id = user.id
+    return user
+
+
+def _second_user(client, email="bo@example.org"):
+    """Another person using the same service, in their own browser."""
+    other = TestClient(client.app, headers=CSRF)
+    _sign_in(other, email)
+    return other
 
 
 def _events(response):
@@ -269,7 +299,7 @@ def test_a_malformed_conversation_id_is_refused(settings, db):
 def test_a_conversation_answers_one_question_at_a_time(settings, db):
     store = ConversationStore()
     client, agent = _client(settings, db, conversations=store)
-    conversation_id, _, _ = store.begin(None)
+    conversation_id, _, _ = store.begin(None, owner=client.user_id)
     response = client.post("/api/ask", json={"question": "q", "conversation_id": conversation_id})
     assert response.status_code == 409 and response.json()["error"] == "busy"
     assert agent.questions == []
@@ -278,10 +308,10 @@ def test_a_conversation_answers_one_question_at_a_time(settings, db):
 def test_a_failed_question_frees_the_conversation_and_adds_no_turn(settings, db):
     store = ConversationStore()
     client, agent = _client(settings, db, conversations=store, fail_with=AgentError("stopped"))
-    conversation_id, _, _ = store.begin(None)
+    conversation_id, _, _ = store.begin(None, owner=client.user_id)
     store.finish(conversation_id, None)
     assert client.post("/api/ask", json={"question": "q", "conversation_id": conversation_id}).status_code == 422
-    _, history, turn = store.begin(conversation_id)
+    _, history, turn = store.begin(conversation_id, owner=client.user_id)
     assert history == () and turn == 1
 
 
@@ -341,23 +371,20 @@ def test_a_run_whose_reader_never_arrives_still_finishes_and_frees_the_conversat
     store = ConversationStore()
     limits = SpendingLimits.from_settings(settings)
     agent = StubAgent(settings, db)
+    user = AccountStore(store.database).create_user("ann@example.org", password=TEST_PASSWORD)
 
     async def ask_and_walk_away():
         background = set()
-        claim = _claim(store, limits, None)
+        claim = _claim(store, limits, None, user)
         _start(agent, store, limits, claim, "How many have diabetes?", background, _Choice("claude-opus-5", "high"))
         await asyncio.gather(*background)
         return claim.conversation_id
 
     conversation_id = asyncio.run(ask_and_walk_away())
-    _, history, turn = store.begin(conversation_id)
+    _, history, turn = store.begin(conversation_id, owner=user.id)
     assert turn == 2 and history[0].question == "How many have diabetes?"
     assert json.loads(settings.log_path.read_text())["conversation_id"] == conversation_id
     assert limits.usage()["running"] == 0 and limits.usage()["spent_today"] == 1350
-
-
-TOKEN = "a-shared-token-that-is-long-enough-to-pass"
-AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 
 @pytest.mark.parametrize(
@@ -366,45 +393,61 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
         ("get", "/api/schema"),
         ("get", "/api/definitions"),
         ("get", "/api/usage"),
+        ("get", "/api/models"),
         ("get", "/api/conversations"),
         ("post", "/api/ask"),
         ("post", "/api/ask/stream"),
     ],
 )
-def test_with_a_token_configured_every_endpoint_but_health_requires_it(settings, db, method, path):
-    client, agent = _client(settings, db, api_token=TOKEN)
+def test_every_endpoint_but_health_and_signing_in_needs_a_session(settings, db, method, path):
+    client, agent = _client(settings, db, signed_in=False)
     kwargs = {"json": {"question": "q"}} if method == "post" else {}
-    for headers in ({}, {"Authorization": "Bearer wrong"}, {"Authorization": TOKEN}):
-        response = getattr(client, method)(path, headers=headers, **kwargs)
-        assert response.status_code == 401, headers
-        assert response.json()["error"] == "unauthorized"
-        assert response.headers["www-authenticate"] == "Bearer"
+    for cookie in (None, "not-a-session"):
+        if cookie:
+            client.cookies.set("sql_agent_session", cookie)
+        response = getattr(client, method)(path, **kwargs)
+        assert response.status_code == 401 and response.json()["error"] == "unauthenticated"
     assert agent.questions == []
-    assert getattr(client, method)(path, headers=AUTH, **kwargs).status_code == 200
+    client.cookies.clear()
+    _sign_in(client)
+    assert getattr(client, method)(path, **kwargs).status_code == 200
 
 
-def test_health_stays_open_so_a_monitor_needs_no_secret(settings, db):
-    client, _ = _client(settings, db, api_token=TOKEN)
+def test_health_and_the_sign_in_page_s_settings_stay_open(settings, db):
+    client, _ = _client(settings, db, signed_in=False)
     assert client.get("/api/health").status_code == 200
+    assert client.get("/api/auth/config").json() == {"registration_open": True, "google_enabled": False}
 
 
-def test_without_a_token_configured_the_service_is_open_for_local_development(settings, db):
-    client, _ = _client(settings, db)
-    assert client.post("/api/ask", json={"question": "q"}).status_code == 200
+def test_a_request_that_changes_something_must_come_from_the_application(settings, db):
+    client, agent = _client(settings, db)
+    bare = TestClient(client.app)  # no X-Requested-With, as a form on another site would send
+    bare.cookies = client.cookies
+    for response in (
+        bare.post("/api/ask", json={"question": "q"}),
+        client.post("/api/ask", json={"question": "q"}, headers={"Origin": "https://evil.example"}),
+        bare.post("/api/auth/logout"),
+    ):
+        assert response.status_code == 403 and response.json()["error"] == "cross_site"
+    assert agent.questions == []
+    allowed = client.post("/api/ask", json={"question": "q"}, headers={"Origin": "http://localhost:4200"})
+    assert allowed.status_code == 200
+    assert bare.get("/api/conversations").status_code == 200, "reading needs no header"
 
 
-def test_the_browser_preflight_needs_no_token(settings, db):
-    client, _ = _client(settings, db, api_token=TOKEN)
+def test_the_browser_preflight_allows_the_application_s_header(settings, db):
+    client, _ = _client(settings, db, signed_in=False)
     response = client.options(
         "/api/ask",
         headers={
             "Origin": "http://localhost:4200",
             "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "authorization,content-type",
+            "Access-Control-Request-Headers": "x-requested-with,content-type",
         },
     )
     assert response.status_code == 200
-    assert "authorization" in response.headers["access-control-allow-headers"].lower()
+    assert "x-requested-with" in response.headers["access-control-allow-headers"].lower()
+    assert response.headers["access-control-allow-credentials"] == "true"
 
 
 def test_an_oversized_body_is_refused_before_it_is_parsed(settings, db):
@@ -443,7 +486,7 @@ def test_a_refused_follow_up_leaves_the_conversation_free(settings, db):
     conversation_id = first["conversation_id"]
     response = client.post("/api/ask", json={"question": "second", "conversation_id": conversation_id})
     assert response.status_code == 429 and response.json()["error"] == "conversation_budget"
-    _, history, turn = store.begin(conversation_id)
+    _, history, turn = store.begin(conversation_id, owner=client.user_id)
     assert turn == 2 and len(history) == 1
     assert client.post("/api/ask", json={"question": "a new conversation"}).status_code == 200
 
@@ -455,18 +498,26 @@ def test_usage_reports_what_answered_questions_spent(settings, db):
     assert usage["spent_today"] == 1350 and usage["running"] == 0 and usage["reserved_today"] == 0
 
 
-def test_every_request_is_logged_including_refusals_and_never_the_token(settings, db):
-    client, _ = _client(settings, db, api_token=TOKEN)
+def test_every_request_is_logged_by_user_id_including_refusals_and_never_the_session(settings, db):
+    client, _ = _client(settings, db, signed_in=False)
     client.get("/api/health")
     client.post("/api/ask", json={"question": "q"})
-    client.post("/api/ask", json={"question": "q"}, headers=AUTH)
+    _sign_in(client)
+    client.post("/api/ask", json={"question": "q"})
     text = settings.request_log_path.read_text()
-    assert TOKEN not in text
-    health, refused, answered = [json.loads(line) for line in text.splitlines()]
-    assert (health["path"], health["status"], health["authenticated"]) == ("/api/health", 200, False)
-    assert (refused["status"], refused["refused"], refused["authenticated"]) == (401, "unauthorized", False)
-    assert (answered["path"], answered["status"], answered["authenticated"], answered["refused"]) == ("/api/ask", 200, True, None)
+    assert client.cookies.get("sql_agent_session") not in text and TEST_EMAIL not in text
+    records = [json.loads(line) for line in text.splitlines()]
+    health, refused, answered = records[0], records[1], records[-1]
+    assert (health["path"], health["status"], health["user_id"]) == ("/api/health", 200, None)
+    assert (refused["status"], refused["refused"], refused["user_id"]) == (401, "unauthenticated", None)
+    assert (answered["path"], answered["status"], answered["user_id"], answered["refused"]) == (
+        "/api/ask",
+        200,
+        client.user_id,
+        None,
+    )
     assert answered["elapsed_ms"] >= 0 and answered["method"] == "POST"
+    assert json.loads(settings.log_path.read_text().splitlines()[-1])["user_id"] == client.user_id
 
 
 def test_a_body_that_hides_its_length_is_still_cut_off(settings, db):
@@ -487,7 +538,7 @@ def test_an_answered_question_is_stored_with_its_rows_and_steps(settings, db):
     store = ConversationStore()
     client, _ = _client(settings, db, conversations=store)
     body = client.post("/api/ask", json={"question": "How many have diabetes?"}).json()
-    (turn,) = store.get(body["conversation_id"]).turns
+    (turn,) = store.get(body["conversation_id"], owner=client.user_id).turns
     assert turn.answer == body
     assert turn.answer["queries"][0]["rows"] == [[8]]
     assert turn.steps == [
@@ -502,7 +553,7 @@ def test_result_rows_can_be_left_out_of_what_is_stored(settings, db):
     client, _ = _client(dataclasses.replace(settings, store_result_rows=False), db, conversations=store)
     body = client.post("/api/ask", json={"question": "How many have diabetes?"}).json()
     assert body["queries"][0]["rows"] == [[8]], "the asker still gets the rows"
-    stored = store.get(body["conversation_id"]).turns[0].answer["queries"][0]
+    stored = store.get(body["conversation_id"], owner=client.user_id).turns[0].answer["queries"][0]
     assert stored["rows"] == [] and stored["row_count"] == 1 and stored["sql"]
 
 
@@ -733,20 +784,21 @@ def test_a_model_or_effort_not_on_offer_is_refused_before_anything_runs(settings
 def test_a_conversation_still_answering_cannot_be_deleted(settings, db):
     store = ConversationStore()
     client, _ = _client(settings, db, conversations=store)
-    conversation_id, _, _ = store.begin(None)
+    conversation_id, _, _ = store.begin(None, owner=client.user_id)
     response = client.delete(f"/api/conversations/{conversation_id}")
     assert response.status_code == 409 and response.json()["error"] == "busy"
     assert client.get(f"/api/conversations/{conversation_id}").json()["busy"] is True
 
 
 @pytest.mark.parametrize("method", ["get", "patch", "delete"])
-def test_managing_a_conversation_requires_the_token_and_a_well_formed_id(settings, db, method):
-    client, _ = _client(settings, db, api_token=TOKEN)
-    conversation_id = _ask(client, headers=AUTH)["conversation_id"]
+def test_managing_a_conversation_requires_a_session_and_a_well_formed_id(settings, db, method):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
     kwargs = {"json": {"title": "x"}} if method == "patch" else {}
-    assert getattr(client, method)(f"/api/conversations/{conversation_id}", **kwargs).status_code == 401
-    assert getattr(client, method)("/api/conversations/not-an-id", headers=AUTH, **kwargs).status_code == 422
-    assert getattr(client, method)(f"/api/conversations/{conversation_id}", headers=AUTH, **kwargs).status_code in (200, 204)
+    signed_out = TestClient(client.app, headers=CSRF)
+    assert getattr(signed_out, method)(f"/api/conversations/{conversation_id}", **kwargs).status_code == 401
+    assert getattr(client, method)("/api/conversations/not-an-id", **kwargs).status_code == 422
+    assert getattr(client, method)(f"/api/conversations/{conversation_id}", **kwargs).status_code in (200, 204)
 
 
 def test_the_browser_may_rename_and_delete_from_the_configured_origin(settings, db):
@@ -791,9 +843,73 @@ def test_a_report_for_a_question_that_was_not_answered_is_refused(settings, db):
     assert client.get(f"/api/conversations/{'f' * 32}/turns/1/report").json()["error"] == "unknown_conversation"
 
 
-def test_a_report_requires_the_token(settings, db):
-    client, _ = _client(settings, db, api_token=TOKEN)
-    conversation_id = _ask(client, headers=AUTH)["conversation_id"]
+def test_a_report_requires_a_session_and_belongs_to_its_owner(settings, db):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
     path = f"/api/conversations/{conversation_id}/turns/1/report"
-    assert client.get(path).status_code == 401
-    assert client.get(path, headers=AUTH).status_code == 200
+    assert TestClient(client.app).get(path).status_code == 401
+    assert client.get(path).status_code == 200
+    assert _second_user(client).get(path).status_code == 404
+
+
+def test_each_person_sees_and_touches_only_their_own_conversations(settings, db):
+    ann, agent = _client(settings, db)
+    mine = _ask(ann, "Ann's question")["conversation_id"]
+    bo = _second_user(ann)
+    theirs = _ask(bo, "Bo's question")["conversation_id"]
+
+    assert [item["id"] for item in ann.get("/api/conversations").json()] == [mine]
+    assert [item["id"] for item in bo.get("/api/conversations").json()] == [theirs]
+    assert bo.get("/api/conversations", params={"q": "Ann"}).json() == []
+    for response in (
+        bo.get(f"/api/conversations/{mine}"),
+        bo.patch(f"/api/conversations/{mine}", json={"title": "taken"}),
+        bo.patch(f"/api/conversations/{mine}", json={"pinned": True}),
+        bo.delete(f"/api/conversations/{mine}"),
+        bo.post("/api/ask", json={"question": "follow-up", "conversation_id": mine}),
+        bo.post("/api/ask/stream", json={"question": "follow-up", "conversation_id": mine}),
+    ):
+        # Exactly what a conversation that does not exist gets, so nothing is revealed.
+        assert response.status_code == 404 and response.json()["error"] == "unknown_conversation"
+    assert ann.get(f"/api/conversations/{mine}").json()["title"] == "Ann's question"
+    assert agent.questions == ["Ann's question", "Bo's question"]
+
+
+def test_admins_may_pick_admin_only_models_and_nobody_else_may(settings, db):
+    user, agent = _client(settings, db)
+    assert "claude-fable-5-1" not in [model["id"] for model in user.get("/api/models").json()["models"]]
+    assert user.post("/api/ask", json={"question": "q", "model": "claude-fable-5-1"}).status_code == 422
+
+    admin = _second_user(user, "admin@example.org")
+    user.app.state.accounts.set_role(admin.user_id, "admin")
+    assert "claude-fable-5-1" in [model["id"] for model in admin.get("/api/models").json()["models"]]
+    assert admin.post("/api/ask", json={"question": "q", "model": "claude-fable-5-1"}).status_code == 200
+    assert agent.choices[-1] == ("claude-fable-5-1", "high")
+
+
+def test_a_new_chat_starts_on_the_person_s_default_model(settings, db):
+    client, agent = _client(settings, db)
+    accounts = client.app.state.accounts
+    accounts.update_profile(client.user_id, default_model="claude-haiku-5-5", default_effort="low")
+    assert client.get("/api/models").json()["default_model"] == "claude-haiku-5-5"
+    client.post("/api/ask", json={"question": "q"})
+    assert agent.choices[-1] == ("claude-haiku-5-5", "low")
+    # A default only admins may use falls back to the service's default.
+    accounts.update_profile(client.user_id, default_model="claude-fable-5-1", default_effort="high")
+    client.post("/api/ask", json={"question": "q"})
+    assert agent.choices[-1] == ("claude-opus-5", "high")
+
+
+def test_each_person_has_a_daily_budget_of_their_own(settings, db):
+    limits = SpendingLimits(
+        max_concurrent_runs=4,
+        daily_token_budget=10**7,
+        conversation_token_budget=10**7,
+        user_daily_token_budget=100_000,
+        reserve_tokens=60_000,
+    )
+    ann, agent = _client(settings, db, limits=limits)
+    limits.settle(limits.reserve("elsewhere", user_id=ann.user_id), 50_000)
+    response = ann.post("/api/ask", json={"question": "q"})
+    assert response.status_code == 429 and response.json()["error"] == "user_budget"
+    assert _second_user(ann).post("/api/ask", json={"question": "q"}).status_code == 200
