@@ -46,6 +46,7 @@ describe('AgentApi', () => {
     const text =
       sse('conversation', { conversation_id: 'c'.repeat(32), turn: 1 }) +
       sse('step', { kind: 'sql', detail: 'SELECT 1' }) +
+      sse('answer_delta', { headline: 'Eight pat', findings: [] }) +
       sse('answer', answer);
     const { api, fetchSpy } = setup(async () =>
       streamResponse([text.slice(0, 30), text.slice(30, 95), text.slice(95)]),
@@ -56,6 +57,7 @@ describe('AgentApi', () => {
     expect(events).toEqual([
       { type: 'conversation', conversationId: 'c'.repeat(32), turn: 1 },
       { type: 'step', step: { kind: 'sql', detail: 'SELECT 1' } },
+      { type: 'draft', draft: { headline: 'Eight pat', findings: [] } },
       { type: 'answer', answer },
     ]);
     const [url, init] = fetchSpy.mock.calls[0];
@@ -130,5 +132,42 @@ describe('AgentApi', () => {
       streamResponse([sse('step', { kind: 'sql', detail: 'SELECT 1' })]),
     );
     await expect(collect(api.askStream('q', null))).rejects.toMatchObject({ kind: 'stream_ended' });
+  });
+
+  it('lists, opens, renames and deletes conversations, with the token', async () => {
+    const id = 'c'.repeat(32);
+    const { api, fetchSpy } = setup(async (url, init) =>
+      init.method === 'DELETE'
+        ? new Response(null, { status: 204 })
+        : jsonResponse(url.endsWith('/conversations') ? [{ id }] : { id, title: 'Renamed' }, 200),
+    );
+    api.token.set('the-shared-token');
+
+    expect(await api.conversations()).toEqual([{ id }]);
+    expect(await api.conversation(id)).toEqual({ id, title: 'Renamed' });
+    expect((await api.renameConversation(id, 'Renamed')).title).toBe('Renamed');
+    await api.deleteConversation(id);
+
+    const calls = fetchSpy.mock.calls.map(([url, init]) => [init.method, url]);
+    expect(calls).toEqual([
+      ['GET', '/api/conversations'],
+      ['GET', `/api/conversations/${id}`],
+      ['PATCH', `/api/conversations/${id}`],
+      ['DELETE', `/api/conversations/${id}`],
+    ]);
+    expect(fetchSpy.mock.calls[2][1].body).toBe(JSON.stringify({ title: 'Renamed' }));
+    for (const [, init] of fetchSpy.mock.calls) {
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer the-shared-token');
+    }
+  });
+
+  it('reports a conversation the service no longer has', async () => {
+    const { api } = setup(async () =>
+      jsonResponse({ error: 'unknown_conversation', message: 'Deleted.' }, 404),
+    );
+    await expect(api.conversation('c'.repeat(32))).rejects.toMatchObject({
+      status: 404,
+      kind: 'unknown_conversation',
+    });
   });
 });

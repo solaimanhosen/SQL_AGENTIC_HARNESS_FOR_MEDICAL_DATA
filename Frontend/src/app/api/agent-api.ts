@@ -1,7 +1,14 @@
 import { Injectable, InjectionToken, inject, signal } from '@angular/core';
 
 import { SseParser } from './sse';
-import { Answer, Health, StreamEvent } from './types';
+import {
+  Answer,
+  ConversationDetail,
+  ConversationSummary,
+  Draft,
+  Health,
+  StreamEvent,
+} from './types';
 
 /** The fetch function the client uses, replaceable in tests. */
 export const FETCH = new InjectionToken<typeof fetch>('fetch', {
@@ -42,9 +49,34 @@ export class AgentApi {
     return (await response.json()) as Health;
   }
 
+  /** Stored conversations, most recently used first. */
+  async conversations(): Promise<ConversationSummary[]> {
+    const response = await this.request('/conversations', { method: 'GET' });
+    return (await response.json()) as ConversationSummary[];
+  }
+
+  /** One stored conversation with every answer in it. */
+  async conversation(id: string): Promise<ConversationDetail> {
+    const response = await this.request(`/conversations/${id}`, { method: 'GET' });
+    return (await response.json()) as ConversationDetail;
+  }
+
+  async renameConversation(id: string, title: string): Promise<ConversationSummary> {
+    const response = await this.request(`/conversations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    return (await response.json()) as ConversationSummary;
+  }
+
+  async deleteConversation(id: string): Promise<void> {
+    await this.request(`/conversations/${id}`, { method: 'DELETE' });
+  }
+
   /**
    * Ask a question and yield each event as it arrives: the conversation first, then each
-   * step, then the answer. A failure, whether before or during the stream, throws ApiError.
+   * step, then the answer as a draft while it is written, then the complete answer. A failure, whether before or during the stream, throws ApiError.
    */
   async *askStream(
     question: string,
@@ -80,6 +112,9 @@ export class AgentApi {
               break;
             case 'step':
               yield { type: 'step', step: data };
+              break;
+            case 'answer_delta':
+              yield { type: 'draft', draft: data as Draft };
               break;
             case 'answer':
               yield { type: 'answer', answer: data as Answer };

@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sql_agent.agent import AgentError, AgentResult
-from sql_agent.answer import AnswerIssues, Finding, StructuredAnswer, TimeWindow
+from sql_agent.answer import AnswerIssues, Draft, Finding, StructuredAnswer, TimeWindow
 from sql_agent.config import load_settings
 from sql_agent.conversations import ConversationStore
 from sql_agent.limits import SpendingLimits
@@ -64,12 +64,15 @@ class StubAgent:
         self.questions = []
         self.histories = []
 
-    def answer(self, question, *, history=(), on_event=None):
+    def answer(self, question, *, history=(), on_event=None, on_draft=None):
         self.questions.append(question)
         self.histories.append(tuple(history))
         if on_event is not None:
             on_event("sql", "SELECT COUNT(*) AS n FROM conditions")
             on_event("sql_result", "1 rows in 3 ms")
+        if on_draft is not None:
+            on_draft(Draft(headline="Eight patients"))
+            on_draft(Draft(headline="Eight patients have diabetes.", findings=("8 patients match",)))
         if self.fail_with is not None:
             raise self.fail_with
         return _result(question, history)
@@ -82,6 +85,7 @@ def settings(sample_db_path, tmp_path):
         db_path=sample_db_path,
         log_path=tmp_path / "runs.jsonl",
         request_log_path=tmp_path / "requests.jsonl",
+        conversations_path=None,
     )
 
 
@@ -285,14 +289,16 @@ def test_the_log_records_the_conversation_and_the_earlier_questions(settings, db
     assert records[1]["previous_questions"] == ["How many have diabetes?"]
 
 
-def test_the_stream_sends_the_conversation_then_each_step_then_the_answer(settings, db):
+def test_the_stream_sends_the_conversation_then_each_step_then_the_draft_then_the_answer(settings, db):
     client, _ = _client(settings, db)
     response = client.post("/api/ask/stream", json={"question": "How many have diabetes?"})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _events(response)
-    assert [event for event, _ in events] == ["conversation", "step", "step", "answer"]
+    assert [event for event, _ in events] == ["conversation", "step", "step", "answer_delta", "answer_delta", "answer"]
     conversation, answer = events[0][1], events[-1][1]
+    assert events[3][1] == {"headline": "Eight patients", "findings": []}
+    assert events[4][1] == {"headline": "Eight patients have diabetes.", "findings": ["8 patients match"]}
     assert conversation["turn"] == 1
     assert events[1][1] == {"kind": "sql", "detail": "SELECT COUNT(*) AS n FROM conditions"}
     assert answer["conversation_id"] == conversation["conversation_id"]
@@ -351,7 +357,14 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 @pytest.mark.parametrize(
     "method,path",
-    [("get", "/api/schema"), ("get", "/api/definitions"), ("get", "/api/usage"), ("post", "/api/ask"), ("post", "/api/ask/stream")],
+    [
+        ("get", "/api/schema"),
+        ("get", "/api/definitions"),
+        ("get", "/api/usage"),
+        ("get", "/api/conversations"),
+        ("post", "/api/ask"),
+        ("post", "/api/ask/stream"),
+    ],
 )
 def test_with_a_token_configured_every_endpoint_but_health_requires_it(settings, db, method, path):
     client, agent = _client(settings, db, api_token=TOKEN)
@@ -463,3 +476,128 @@ def test_a_body_that_hides_its_length_is_still_cut_off(settings, db):
     response = client.post("/api/ask", content=chunks(), headers={"Content-Type": "application/json"})
     assert response.status_code == 413 and response.json()["error"] == "too_large"
     assert agent.questions == []
+
+
+def test_an_answered_question_is_stored_with_its_rows_and_steps(settings, db):
+    store = ConversationStore()
+    client, _ = _client(settings, db, conversations=store)
+    body = client.post("/api/ask", json={"question": "How many have diabetes?"}).json()
+    (turn,) = store.get(body["conversation_id"]).turns
+    assert turn.answer == body
+    assert turn.answer["queries"][0]["rows"] == [[8]]
+    assert turn.steps == [
+        {"kind": "sql", "detail": "SELECT COUNT(*) AS n FROM conditions"},
+        {"kind": "sql_result", "detail": "1 rows in 3 ms"},
+    ]
+    assert store.tokens_spent(body["conversation_id"]) == 1350
+
+
+def test_result_rows_can_be_left_out_of_what_is_stored(settings, db):
+    store = ConversationStore()
+    client, _ = _client(dataclasses.replace(settings, store_result_rows=False), db, conversations=store)
+    body = client.post("/api/ask", json={"question": "How many have diabetes?"}).json()
+    assert body["queries"][0]["rows"] == [[8]], "the asker still gets the rows"
+    stored = store.get(body["conversation_id"]).turns[0].answer["queries"][0]
+    assert stored["rows"] == [] and stored["row_count"] == 1 and stored["sql"]
+
+
+def test_a_conversation_is_continued_after_the_service_restarts(settings, db, tmp_path):
+    settings = dataclasses.replace(settings, conversations_path=tmp_path / "conversations.db")
+    client, _ = _client(settings, db)
+    conversation_id = client.post("/api/ask", json={"question": "How many have diabetes?"}).json()["conversation_id"]
+
+    restarted, agent = _client(settings, db)
+    body = restarted.post("/api/ask", json={"question": "And heart disease?", "conversation_id": conversation_id}).json()
+    assert body["turn"] == 2
+    assert agent.histories[0][0].question == "How many have diabetes?"
+
+
+def test_a_conversation_budget_is_not_reset_by_a_restart(settings, db, tmp_path):
+    settings = dataclasses.replace(settings, conversations_path=tmp_path / "conversations.db", conversation_token_budget=100_000)
+    client, _ = _client(settings, db)
+    conversation_id = client.post("/api/ask", json={"question": "q"}).json()["conversation_id"]
+    ConversationStore(settings.conversations_path)._db.execute("UPDATE conversations SET tokens_spent = 90000")
+
+    restarted, agent = _client(settings, db)
+    response = restarted.post("/api/ask", json={"question": "again", "conversation_id": conversation_id})
+    assert response.status_code == 429 and response.json()["error"] == "conversation_budget"
+    assert agent.questions == []
+
+
+def _ask(client, question="How many have diabetes?", conversation_id=None, **kwargs):
+    payload = {"question": question} | ({"conversation_id": conversation_id} if conversation_id else {})
+    return client.post("/api/ask", json=payload, **kwargs).json()
+
+
+def test_conversations_are_listed_most_recently_used_first(settings, db):
+    client, _ = _client(settings, db)
+    assert client.get("/api/conversations").json() == []
+    first = _ask(client)["conversation_id"]
+    second = _ask(client, "Which age band has the most visits?")["conversation_id"]
+    _ask(client, "And heart disease?", first)
+    listed = client.get("/api/conversations").json()
+    assert [(item["id"], item["title"], item["turns"]) for item in listed] == [
+        (first, "How many have diabetes?", 2),
+        (second, "Which age band has the most visits?", 1),
+    ]
+    assert listed[0]["updated_at"] > listed[0]["created_at"]
+
+
+def test_a_stored_conversation_is_returned_with_every_answer_as_it_was_sent(settings, db):
+    client, _ = _client(settings, db)
+    asked = _ask(client)
+    followed = _ask(client, "And heart disease?", asked["conversation_id"])
+    body = client.get(f"/api/conversations/{asked['conversation_id']}").json()
+    assert body["title"] == "How many have diabetes?" and body["turns"] == 2 and body["busy"] is False
+    assert [turn["answer"] for turn in body["history"]] == [asked, followed]
+    assert body["history"][0]["steps"][0] == {"kind": "sql", "detail": "SELECT COUNT(*) AS n FROM conditions"}
+    assert body["history"][0]["answer"]["definitions_used"][0]["status"] == "assumed"
+
+
+def test_a_conversation_can_be_renamed_and_deleted(settings, db):
+    client, agent = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    renamed = client.patch(f"/api/conversations/{conversation_id}", json={"title": "Diabetes counts"})
+    assert renamed.status_code == 200 and renamed.json()["title"] == "Diabetes counts"
+    for title in ("", "   ", "x" * 101):
+        assert client.patch(f"/api/conversations/{conversation_id}", json={"title": title}).status_code == 422
+
+    assert client.delete(f"/api/conversations/{conversation_id}").status_code == 204
+    assert client.get("/api/conversations").json() == []
+    for response in (
+        client.get(f"/api/conversations/{conversation_id}"),
+        client.delete(f"/api/conversations/{conversation_id}"),
+        client.patch(f"/api/conversations/{conversation_id}", json={"title": "x"}),
+        client.post("/api/ask", json={"question": "q", "conversation_id": conversation_id}),
+    ):
+        assert response.status_code == 404 and response.json()["error"] == "unknown_conversation"
+    assert len(agent.questions) == 1
+
+
+def test_a_conversation_still_answering_cannot_be_deleted(settings, db):
+    store = ConversationStore()
+    client, _ = _client(settings, db, conversations=store)
+    conversation_id, _, _ = store.begin(None)
+    response = client.delete(f"/api/conversations/{conversation_id}")
+    assert response.status_code == 409 and response.json()["error"] == "busy"
+    assert client.get(f"/api/conversations/{conversation_id}").json()["busy"] is True
+
+
+@pytest.mark.parametrize("method", ["get", "patch", "delete"])
+def test_managing_a_conversation_requires_the_token_and_a_well_formed_id(settings, db, method):
+    client, _ = _client(settings, db, api_token=TOKEN)
+    conversation_id = _ask(client, headers=AUTH)["conversation_id"]
+    kwargs = {"json": {"title": "x"}} if method == "patch" else {}
+    assert getattr(client, method)(f"/api/conversations/{conversation_id}", **kwargs).status_code == 401
+    assert getattr(client, method)("/api/conversations/not-an-id", headers=AUTH, **kwargs).status_code == 422
+    assert getattr(client, method)(f"/api/conversations/{conversation_id}", headers=AUTH, **kwargs).status_code in (200, 204)
+
+
+def test_the_browser_may_rename_and_delete_from_the_configured_origin(settings, db):
+    client, _ = _client(settings, db)
+    for method in ("PATCH", "DELETE"):
+        response = client.options(
+            "/api/conversations/" + "0" * 32,
+            headers={"Origin": "http://localhost:4200", "Access-Control-Request-Method": method},
+        )
+        assert response.status_code == 200 and method in response.headers["access-control-allow-methods"]

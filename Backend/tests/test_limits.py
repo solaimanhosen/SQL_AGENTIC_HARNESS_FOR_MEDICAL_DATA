@@ -88,3 +88,18 @@ def test_refusals_explain_themselves():
     limits.reserve("a")
     with pytest.raises(LimitExceeded, match="Try again shortly"):
         limits.reserve("b")
+
+
+def test_a_conversation_from_before_a_restart_starts_from_what_it_had_spent():
+    limits = _limits()
+    assert _refused_with(limits, already_spent=60_000) == "conversation_budget"
+    reservation = limits.reserve("c1", already_spent=40_000)
+    limits.settle(reservation, 15_000)
+    # Once the ledger knows the conversation, its own count is used, not the stored one.
+    assert _refused_with(limits, already_spent=0) == "conversation_budget"
+
+
+def _refused_with(limits, *, already_spent):
+    with pytest.raises(LimitExceeded) as caught:
+        limits.reserve("c1", already_spent=already_spent)
+    return caught.value.kind

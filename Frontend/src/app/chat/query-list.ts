@@ -77,6 +77,11 @@ export class QueryList {
     );
   }
 
+  /** True for a stored answer whose rows were left out, by the service's setting. */
+  protected rowsLeftOut(query: QueryRecord): boolean {
+    return !query.rows.length && (query.row_count ?? 0) > 0;
+  }
+
   protected onToggle(event: Event): void {
     this.open.set((event.target as HTMLDetailsElement).open);
   }

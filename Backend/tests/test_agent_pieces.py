@@ -2,14 +2,14 @@ import dataclasses
 from datetime import date
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 import main
 import sql_agent.agent as agent_module
 from sql_agent.agent import MAX_HISTORY_TURNS, AgentResult, SqlAgent, Turn, _final_text, _token_totals
 from sql_agent.config import load_settings
 from sql_agent.db import ReadOnlyDatabase
-from sql_agent.answer import AnswerIssues, Finding, StructuredAnswer, TimeWindow
+from sql_agent.answer import AnswerIssues, Draft, Finding, StructuredAnswer, TimeWindow, draft_from_partial
 from sql_agent.prompts import build_system_prompt
 from sql_agent.semantic import load_semantic_layer
 from sql_agent.tools import QueryRecord
@@ -125,12 +125,18 @@ class _FakeGraph:
     def __init__(self):
         self.inputs = []
 
-    def invoke(self, state, config=None):
+    def stream(self, state, config=None, stream_mode=None):
         self.inputs.append(state)
-        return {
+        assert stream_mode == ["messages", "values"]
+        yield "values", {"messages": []}
+        for chunk in self.chunks:
+            yield "messages", (chunk, {"langgraph_node": "model"})
+        yield "values", {
             "messages": [AIMessage("done", usage_metadata={"input_tokens": 3, "output_tokens": 1, "total_tokens": 4})],
             "structured_response": StructuredAnswer(headline="Seventeen patients have heart disease."),
         }
+
+    chunks = ()
 
 
 @pytest.fixture
@@ -187,3 +193,40 @@ def test_the_prompt_says_earlier_answers_are_context_not_evidence():
     prompt = build_system_prompt(load_semantic_layer(), AS_OF, max_rows=200)
     assert "context, not evidence" in prompt
     assert "cite only the queries you ran for this question" in prompt
+
+
+def test_a_draft_is_read_from_an_answer_that_has_only_partly_arrived():
+    assert draft_from_partial('{"headline":"8 of the 108 pat') == Draft(headline="8 of the 108 pat")
+    partial = '{"headline":"Eight.","findings":[{"statement":"8 match.","query_numbers":[1]},{"statement":"A further 34'
+    assert draft_from_partial(partial) == Draft(headline="Eight.", findings=("8 match.", "A further 34"))
+
+
+@pytest.mark.parametrize("text", ["", "{", '{"headline":""', "Let me check the tables first.", "[1, 2]", '{"findings":[{}]}'])
+def test_text_that_holds_no_answer_yet_gives_no_draft(text):
+    assert draft_from_partial(text) is None
+
+
+def test_the_answer_is_reported_as_the_model_writes_it(offline_agent):
+    offline_agent.graph.chunks = [
+        AIMessageChunk("I will count them.", id="m1"),
+        AIMessageChunk('{"headline":"Seventeen pat', id="m2"),
+        AIMessageChunk("", id="m2"),
+        AIMessageChunk('ients have heart disease.","findings":[', id="m2"),
+        AIMessageChunk('{"statement":"17 match."}]}', id="m2"),
+    ]
+    drafts = []
+    result = offline_agent.answer("How many?", on_draft=drafts.append)
+    assert drafts == [
+        Draft(headline="Seventeen pat"),
+        Draft(headline="Seventeen patients have heart disease."),
+        Draft(headline="Seventeen patients have heart disease.", findings=("17 match.",)),
+    ]
+    assert result.structured.headline == "Seventeen patients have heart disease."
+    assert (result.input_tokens, result.output_tokens) == (3, 1)
+
+
+def test_a_remark_before_a_tool_call_does_not_leak_into_the_draft(offline_agent):
+    offline_agent.graph.chunks = [AIMessageChunk('{"note": "thinking aloud"}', id="m1"), AIMessageChunk('{"headline":"Done."}', id="m2")]
+    drafts = []
+    offline_agent.answer("How many?", on_draft=drafts.append)
+    assert drafts == [Draft(headline="Done.")]

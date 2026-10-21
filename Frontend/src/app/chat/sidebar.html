@@ -1,0 +1,86 @@
+<div class="top">
+  <button type="button" class="new" [disabled]="busy()" (click)="newChat.emit()">New chat</button>
+  <button
+    type="button"
+    class="hide"
+    aria-label="Hide conversations"
+    title="Hide conversations"
+    (click)="collapse.emit()"
+  >
+    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+      <rect
+        x="2.5"
+        y="3.5"
+        width="15"
+        height="13"
+        rx="2"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+      />
+      <path
+        d="M7.5 3.5v13M13.5 7.5 11 10l2.5 2.5"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+      />
+    </svg>
+  </button>
+</div>
+
+<nav aria-label="Conversations">
+  @if (!conversations().length) {
+    <p class="empty">Conversations you have appear here.</p>
+  }
+  <ul>
+    @for (conversation of conversations(); track conversation.id) {
+      <li [class.active]="conversation.id === activeId()">
+        @if (renaming() === conversation.id) {
+          <form class="rename" (submit)="saveRename($event, conversation)">
+            <label class="visually-hidden" [attr.for]="'title-' + conversation.id">New title</label>
+            <input
+              #titleInput
+              [id]="'title-' + conversation.id"
+              [value]="draftTitle()"
+              [attr.maxlength]="max"
+              (input)="draftTitle.set($any($event.target).value)"
+              (keydown.escape)="renaming.set(null)"
+            />
+            <button type="submit" class="small">Save</button>
+            <button type="button" class="small" (click)="renaming.set(null)">Cancel</button>
+          </form>
+        } @else if (deleting() === conversation.id) {
+          <div class="confirm" role="group" aria-label="Confirm deletion">
+            <span class="ask">Delete this conversation?</span>
+            <button type="button" class="small danger" (click)="confirmDelete(conversation.id)">
+              Delete
+            </button>
+            <button type="button" class="small" (click)="deleting.set(null)">Keep</button>
+          </div>
+        } @else {
+          <button
+            type="button"
+            class="title"
+            [disabled]="busy()"
+            [attr.aria-current]="conversation.id === activeId() ? 'true' : null"
+            [title]="conversation.title"
+            (click)="open.emit(conversation.id)"
+          >
+            <span>{{ conversation.title }}</span>
+          </button>
+          <div class="tools">
+            <button type="button" class="small" (click)="startRename(conversation)">Rename</button>
+            <button
+              type="button"
+              class="small"
+              [disabled]="busy() && conversation.id === activeId()"
+              (click)="askDelete(conversation.id)"
+            >
+              Delete
+            </button>
+          </div>
+        }
+      </li>
+    }
+  </ul>
+</nav>

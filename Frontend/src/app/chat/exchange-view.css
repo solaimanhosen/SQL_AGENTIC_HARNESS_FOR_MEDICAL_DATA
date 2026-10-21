@@ -46,6 +46,29 @@
   }
 }
 
+.draft {
+  margin-top: 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.draft-label {
+  margin: 0 0 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.draft-headline {
+  margin: 0;
+  font-weight: 600;
+}
+
+.draft-findings {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+}
+
 .failed {
   border-color: var(--danger);
 }

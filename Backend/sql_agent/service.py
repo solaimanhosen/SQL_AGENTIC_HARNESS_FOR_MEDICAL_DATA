@@ -10,8 +10,9 @@ Run it from the Backend folder:
     .venv/bin/python -m sql_agent.serve
 
 The agent runs in a worker thread, so a slow question does not block health checks or
-other requests. Questions can belong to a conversation, so a follow-up such as "what about
-heart disease?" is understood, and `/api/ask/stream` sends each step as it happens.
+other requests. Questions belong to a conversation, so a follow-up such as "what about
+heart disease?" is understood, and `/api/ask/stream` sends each step as it happens, then
+the answer as it is written. Conversations are stored, so they can be listed and reopened.
 
 When a shared token is configured, every endpoint except health requires it. Request bodies
 are capped, and the limits in limits.py refuse a question before it reaches the model when
@@ -26,12 +27,12 @@ import logging
 import secrets
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Literal
 
 import anthropic
 import anyio
-from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Path, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -43,8 +44,14 @@ from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .agent import AgentError, AgentResult, SqlAgent, Turn, describe_failure
-from .answer import describe_window
-from .conversations import ConversationBusy, ConversationStore, UnknownConversation
+from .answer import Draft, describe_window
+from .conversations import (
+    MAX_TITLE_CHARS,
+    ConversationBusy,
+    ConversationStore,
+    ConversationSummary,
+    UnknownConversation,
+)
 from .limits import LimitExceeded, Reservation, SpendingLimits
 from .requestlog import RequestLogMiddleware
 from .runlog import log_run
@@ -160,6 +167,42 @@ class TableOut(BaseModel):
     notes: list[str]
 
 
+class StepOut(BaseModel):
+    kind: str
+    detail: str
+
+
+class ConversationOut(BaseModel):
+    id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    turns: int
+    """Questions answered in it so far."""
+
+
+class StoredTurnOut(BaseModel):
+    turn: int
+    question: str
+    created_at: datetime
+    answer: AnswerOut
+    """The answer as it was sent when the question was asked."""
+    steps: list[StepOut]
+
+
+class ConversationDetailOut(ConversationOut):
+    busy: bool
+    """True while a question is being answered, so its turn is not stored yet."""
+    history: list[StoredTurnOut]
+
+
+class RenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=MAX_TITLE_CHARS, pattern=r"\S")
+
+
+ConversationId = Path(pattern=CONVERSATION_ID_PATTERN)
+
+
 class ErrorOut(BaseModel):
     error: str
     message: str
@@ -197,7 +240,7 @@ def create_app(
     `api_token` set, every endpoint except health requires it as a bearer token.
     """
     agent = agent or SqlAgent()
-    conversations = ConversationStore() if conversations is None else conversations
+    conversations = ConversationStore(agent.settings.conversations_path) if conversations is None else conversations
     limits = SpendingLimits.from_settings(agent.settings) if limits is None else limits
     # Streaming runs outlive their connection, so they are held here until they finish.
     background: set[asyncio.Task] = set()
@@ -214,7 +257,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(agent.settings.cors_origins),
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type", "Authorization"],
     )
     if agent.settings.request_log_path is not None:
@@ -272,7 +315,7 @@ def create_app(
 
     @app.exception_handler(UnknownConversation)
     async def unknown_conversation(_: Request, exc: UnknownConversation) -> JSONResponse:
-        return _error(404, "unknown_conversation", "This conversation has expired or never existed. Start a new one.")
+        return _error(404, "unknown_conversation", "This conversation was deleted or never existed. Start a new one.")
 
     @app.exception_handler(ConversationBusy)
     async def busy_conversation(_: Request, exc: ConversationBusy) -> JSONResponse:
@@ -303,6 +346,35 @@ def create_app(
     @protected.get("/api/definitions")
     def definitions() -> list[DefinitionOut]:
         return [definition_payload(agent.layer, name) for name in agent.layer.definitions]
+
+    @protected.get("/api/conversations")
+    def list_conversations() -> list[ConversationOut]:
+        """Conversations with at least one answer, most recently used first."""
+        return [_conversation_out(summary) for summary in conversations.list()]
+
+    @protected.get("/api/conversations/{conversation_id}")
+    def get_conversation(conversation_id: str = ConversationId) -> ConversationDetailOut:
+        stored = conversations.get(conversation_id)
+        return ConversationDetailOut(
+            **_conversation_out(stored.summary).model_dump(),
+            busy=stored.busy,
+            history=[
+                StoredTurnOut(
+                    turn=turn.turn, question=turn.question, created_at=turn.created_at, answer=turn.answer, steps=turn.steps
+                )
+                for turn in stored.turns
+                if turn.answer is not None
+            ],
+        )
+
+    @protected.patch("/api/conversations/{conversation_id}")
+    def rename_conversation(request: RenameRequest, conversation_id: str = ConversationId) -> ConversationOut:
+        return _conversation_out(conversations.rename(conversation_id, request.title))
+
+    @protected.delete("/api/conversations/{conversation_id}", status_code=204)
+    def delete_conversation(conversation_id: str = ConversationId) -> Response:
+        conversations.delete(conversation_id)
+        return Response(status_code=204)
 
     @protected.post("/api/ask")
     async def ask(request: AskRequest) -> AnswerOut:
@@ -362,7 +434,7 @@ def _claim(conversations: ConversationStore, limits: SpendingLimits, conversatio
     """Claim the conversation, then the budget, releasing the conversation if that fails."""
     conversation_id, history, turn = conversations.begin(conversation_id)
     try:
-        reservation = limits.reserve(conversation_id)
+        reservation = limits.reserve(conversation_id, already_spent=conversations.tokens_spent(conversation_id))
     except LimitExceeded:
         conversations.finish(conversation_id, None)
         raise
@@ -374,7 +446,9 @@ STREAM_DESCRIPTION = """Server-sent events, read with fetch because the request 
 - `conversation`: `{conversation_id, turn}`, sent first.
 - `step`: `{kind, detail}` for each step, where kind is sql, sql_result, sql_error,
   describe_table or lookup_definition.
-- `answer`: the same body `/api/ask` returns. The stream then ends.
+- `answer_delta`: `{headline, findings}`, the whole answer text written so far, sent as it
+  grows. It is a draft: unchecked, and without citations, definitions or dates.
+- `answer`: the same body `/api/ask` returns, which replaces any draft. The stream then ends.
 - `error`: `{error, message, status}`. The stream then ends.
 """
 
@@ -386,17 +460,55 @@ async def _run(
     claim: _Claim,
     question: str,
     on_event: Callable[[str, str], None] | None = None,
+    on_draft: Callable[[Draft], None] | None = None,
 ) -> AnswerOut:
-    """Answer one claimed question, then release its conversation and settle its budget."""
-    result = None
+    """Answer one claimed question, then store it, release its conversation and settle its budget."""
+    result = answer = None
+    steps: list[dict] = []
+
+    def record_step(kind: str, detail: str) -> None:
+        steps.append({"kind": kind, "detail": detail})
+        if on_event is not None:
+            on_event(kind, detail)
+
     try:
         result = await anyio.to_thread.run_sync(
-            _answer_and_log, agent, question, claim.history, claim.conversation_id, on_event
+            _answer_and_log, agent, question, claim.history, claim.conversation_id, record_step, on_draft
         )
-        return answer_payload(result, agent.layer, conversation_id=claim.conversation_id, turn=claim.turn)
+        answer = answer_payload(result, agent.layer, conversation_id=claim.conversation_id, turn=claim.turn)
+        return answer
     finally:
-        conversations.finish(claim.conversation_id, result.as_turn() if result else None)
+        if answer is None:
+            conversations.finish(claim.conversation_id, None)
+        else:
+            conversations.finish(
+                claim.conversation_id,
+                result.as_turn(),
+                answer=_stored_answer(answer, keep_rows=agent.settings.store_result_rows),
+                steps=steps,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+            )
         limits.settle(claim.reservation, result.input_tokens + result.output_tokens if result else None)
+
+
+def _conversation_out(summary: ConversationSummary) -> ConversationOut:
+    return ConversationOut(
+        id=summary.id,
+        title=summary.title,
+        created_at=summary.created_at,
+        updated_at=summary.updated_at,
+        turns=summary.turn_count,
+    )
+
+
+def _stored_answer(answer: AnswerOut, *, keep_rows: bool) -> dict:
+    """The answer as it is kept with its conversation, with or without the rows behind it."""
+    stored = answer.model_dump(mode="json")
+    if not keep_rows:
+        for query in stored["queries"]:
+            query["rows"] = []
+    return stored
 
 
 def _answer_and_log(
@@ -405,8 +517,9 @@ def _answer_and_log(
     history: tuple[Turn, ...],
     conversation_id: str,
     on_event: Callable[[str, str], None] | None,
+    on_draft: Callable[[Draft], None] | None,
 ) -> AgentResult:
-    result = agent.answer(question, history=history, on_event=on_event)
+    result = agent.answer(question, history=history, on_event=on_event, on_draft=on_draft)
     if agent.settings.log_path is not None:
         log_run(result, agent.settings.log_path, conversation_id=conversation_id)
     return result
@@ -429,16 +542,22 @@ def _start(
     loop = asyncio.get_running_loop()
     events: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
 
-    def on_event(kind: str, detail: str) -> None:
+    def send(event: str, data: dict) -> None:
         # Called from the worker thread, so the event is handed to the event loop.
         try:
-            loop.call_soon_threadsafe(events.put_nowait, ("step", {"kind": kind, "detail": detail}))
+            loop.call_soon_threadsafe(events.put_nowait, (event, data))
         except RuntimeError:
             pass  # the event loop has closed, so nobody is listening
 
+    def on_event(kind: str, detail: str) -> None:
+        send("step", {"kind": kind, "detail": detail})
+
+    def on_draft(draft: Draft) -> None:
+        send("answer_delta", {"headline": draft.headline, "findings": list(draft.findings)})
+
     async def run() -> None:
         try:
-            answer = await _run(agent, conversations, limits, claim, question, on_event)
+            answer = await _run(agent, conversations, limits, claim, question, on_event, on_draft)
             events.put_nowait(("answer", answer.model_dump(mode="json")))
         except (AgentError, anthropic.APIError) as exc:
             status, kind, message = _failure(exc)

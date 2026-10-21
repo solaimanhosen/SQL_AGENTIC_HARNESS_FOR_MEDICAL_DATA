@@ -32,6 +32,7 @@ DEFAULT_REQUEST_LOG_PATH = "logs/requests.jsonl"
 DEFAULT_MAX_CONCURRENT_RUNS = 4
 DEFAULT_DAILY_TOKEN_BUDGET = 5_000_000
 DEFAULT_CONVERSATION_TOKEN_BUDGET = 1_000_000
+DEFAULT_CONVERSATIONS_PATH = "data/conversations.db"
 MIN_API_TOKEN_CHARS = 32
 
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -74,6 +75,10 @@ class Settings:
     """Model tokens, input and output together, the service may spend per UTC day."""
     conversation_token_budget: int
     """Model tokens one conversation may spend, so a long conversation cannot run away."""
+    conversations_path: Path | None = None
+    """The database the service keeps conversations in, or None to keep them in memory."""
+    store_result_rows: bool = True
+    """Whether a stored answer keeps the rows its queries returned, or only what ran."""
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -110,6 +115,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
             100_000,
             10**10,
         ),
+        conversations_path=_parse_log_path(env.get("SQL_AGENT_CONVERSATIONS_PATH", DEFAULT_CONVERSATIONS_PATH)),
+        store_result_rows=_parse_bool("SQL_AGENT_STORE_RESULT_ROWS", env.get("SQL_AGENT_STORE_RESULT_ROWS", "true")),
     )
 
 

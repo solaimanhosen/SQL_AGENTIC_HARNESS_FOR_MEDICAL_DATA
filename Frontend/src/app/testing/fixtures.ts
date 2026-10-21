@@ -1,4 +1,4 @@
-import { Answer } from '../api/types';
+import { Answer, ConversationDetail, ConversationSummary } from '../api/types';
 
 /** A complete answer as the service returns it, with any field overridden. */
 export function answerFixture(overrides: Partial<Answer> = {}): Answer {
@@ -46,6 +46,37 @@ export function answerFixture(overrides: Partial<Answer> = {}): Answer {
     elapsed_s: 12.3,
     input_tokens: 1200,
     output_tokens: 150,
+    ...overrides,
+  };
+}
+
+export function summaryFixture(overrides: Partial<ConversationSummary> = {}): ConversationSummary {
+  return {
+    id: 'c'.repeat(32),
+    title: 'How many patients have diabetes?',
+    created_at: '2026-10-13T15:00:00Z',
+    updated_at: '2026-10-13T15:01:00Z',
+    turns: 1,
+    ...overrides,
+  };
+}
+
+/** A stored conversation with one answered question, with any field overridden. */
+export function conversationFixture(
+  overrides: Partial<ConversationDetail> = {},
+): ConversationDetail {
+  return {
+    ...summaryFixture(),
+    busy: false,
+    history: [
+      {
+        turn: 1,
+        question: 'How many patients have diabetes?',
+        created_at: '2026-10-13T15:01:00Z',
+        answer: answerFixture(),
+        steps: [{ kind: 'sql', detail: 'SELECT 1' }],
+      },
+    ],
     ...overrides,
   };
 }

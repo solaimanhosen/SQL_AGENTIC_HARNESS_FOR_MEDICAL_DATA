@@ -78,8 +78,43 @@ export interface Step {
   detail: string;
 }
 
+/** A stored conversation as the sidebar lists it. */
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  /** Questions answered in it so far. */
+  turns: number;
+}
+
+/** One answered question of a stored conversation, as it was sent when it was asked. */
+export interface StoredTurn {
+  turn: number;
+  question: string;
+  created_at: string;
+  answer: Answer;
+  steps: Step[];
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  /** True while a question is being answered, so its turn is not in `history` yet. */
+  busy: boolean;
+  history: StoredTurn[];
+}
+
+/**
+ * The answer while the model is still writing it. It is unchecked text, with no citations,
+ * definitions or dates: those arrive only with the complete answer.
+ */
+export interface Draft {
+  headline: string;
+  findings: string[];
+}
+
 /** One event from /api/ask/stream, in the order the service sends them. */
 export type StreamEvent =
   | { type: 'conversation'; conversationId: string; turn: number }
   | { type: 'step'; step: Step }
+  | { type: 'draft'; draft: Draft }
   | { type: 'answer'; answer: Answer };

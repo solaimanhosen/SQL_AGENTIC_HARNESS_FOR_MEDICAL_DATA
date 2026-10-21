@@ -11,8 +11,9 @@ leaves. So each run reserves an allowance when it starts, which counts against b
 until the run settles with what it actually used. A run that fails keeps its reservation,
 since what it spent before failing is not known.
 
-The ledger lives in memory, so a restart resets it. That is recorded as a residual risk in
-docs/security.md.
+The ledger lives in memory, so a restart resets the daily total. That is recorded as a
+residual risk in docs/security.md. A conversation's own total is stored with it, so its
+budget survives a restart.
 """
 
 from __future__ import annotations
@@ -81,8 +82,12 @@ class SpendingLimits:
             conversation_token_budget=settings.conversation_token_budget,
         )
 
-    def reserve(self, conversation_id: str) -> Reservation:
-        """Claim room for one run, or raise LimitExceeded. Every reservation must be settled."""
+    def reserve(self, conversation_id: str, *, already_spent: int = 0) -> Reservation:
+        """Claim room for one run, or raise LimitExceeded. Every reservation must be settled.
+
+        `already_spent` is what the conversation's stored turns used. It is the starting
+        point for a conversation this ledger has not seen, such as one from before a restart.
+        """
         with self._lock:
             self._roll_over()
             if self._running >= self.max_concurrent_runs:
@@ -93,7 +98,7 @@ class SpendingLimits:
                 raise LimitExceeded(
                     "daily_budget", "The service has used its model budget for today. It resets at midnight UTC."
                 )
-            spent = self._conversations.get(conversation_id, 0)
+            spent = self._conversations.get(conversation_id, already_spent)
             if spent + self.reserve_tokens > self.conversation_token_budget:
                 raise LimitExceeded(
                     "conversation_budget", "This conversation has used its model budget. Start a new conversation."

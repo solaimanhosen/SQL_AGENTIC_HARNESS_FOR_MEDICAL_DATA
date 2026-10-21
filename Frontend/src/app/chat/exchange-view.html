@@ -14,6 +14,21 @@
             >
           }
         </p>
+        @if (item.draft; as draft) {
+          <div class="draft" aria-live="off">
+            <p class="draft-label">Draft. Sources and checks follow when it is complete.</p>
+            @if (draft.headline) {
+              <p class="draft-headline">{{ draft.headline }}</p>
+            }
+            @if (draft.findings.length) {
+              <ul class="draft-findings">
+                @for (finding of draft.findings; track $index) {
+                  <li>{{ finding }}</li>
+                }
+              </ul>
+            }
+          </div>
+        }
         @if (item.steps.length) {
           <details class="panel">
             <summary>Steps so far ({{ item.steps.length }})</summary>

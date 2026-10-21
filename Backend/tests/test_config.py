@@ -123,3 +123,10 @@ def test_the_api_token_is_optional_long_and_never_in_settings():
     with pytest.raises(ConfigError, match="SQL_AGENT_API_TOKEN"):
         load_api_token({"SQL_AGENT_API_TOKEN": "short"})
     assert token not in repr(load_settings({"SQL_AGENT_API_TOKEN": token}))
+
+
+def test_conversations_are_stored_by_default_and_can_be_kept_in_memory():
+    s = load_settings({})
+    assert s.conversations_path == BACKEND_DIR / "data" / "conversations.db" and s.store_result_rows is True
+    s = load_settings({"SQL_AGENT_CONVERSATIONS_PATH": "off", "SQL_AGENT_STORE_RESULT_ROWS": "false"})
+    assert s.conversations_path is None and s.store_result_rows is False

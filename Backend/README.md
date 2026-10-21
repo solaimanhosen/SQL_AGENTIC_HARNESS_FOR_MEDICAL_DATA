@@ -80,7 +80,11 @@ curl -s -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \
 | GET | `/api/definitions` | Every shared definition with its confirmation status. |
 | GET | `/api/usage` | Questions running now and tokens spent today against the daily budget. |
 | POST | `/api/ask` | The answer, its findings, the SQL with its rows, and any traceability warnings. |
-| POST | `/api/ask/stream` | The same answer, preceded by each step as it happens, as server-sent events. |
+| POST | `/api/ask/stream` | The same answer, preceded by each step as it happens and by the answer text as it is written, as server-sent events. |
+| GET | `/api/conversations` | Stored conversations with at least one answer, most recently used first. |
+| GET | `/api/conversations/{id}` | One conversation: every question with its answer and steps as first sent, and whether it is still answering. |
+| PATCH | `/api/conversations/{id}` | Rename it, with `{"title": "..."}` of 1 to 100 characters. |
+| DELETE | `/api/conversations/{id}` | Delete it and its answers. A conversation still answering gets a 409. |
 
 The answer carries the same parts the command line prints, filled in from our own records:
 each definition's status comes from the semantic layer, and the window dates are computed
@@ -92,8 +96,16 @@ next question, and a follow-up such as "what about heart disease?" is understood
 sees the last six questions with their answers and SQL as context. Query numbers start
 again at 1 for each question, and a figure from an earlier answer must be queried again
 before it is stated, so every citation still points at SQL that ran for this question.
-Conversations are held in memory and a restart forgets them. One question at a time may be
-answered in a conversation. A second one asked meanwhile gets a 409.
+One question at a time may be answered in a conversation. A second one asked meanwhile
+gets a 409.
+
+Conversations are stored in their own SQLite file, `data/conversations.db`, never in the
+patient database, so they survive a restart and can be listed, reopened and continued. Each
+answer is stored as it was sent, rows included, and titled after its conversation's first
+question. Set `SQL_AGENT_STORE_RESULT_ROWS=false` to store answers without their rows, or
+`SQL_AGENT_CONVERSATIONS_PATH=off` to keep conversations in memory only. At most 1,000
+conversations are kept, and the least recently used is removed first. See
+`docs/chat-history-and-streaming.md` for the design.
 
 ```bash
 curl -sN -X POST localhost:8000/api/ask/stream -H 'Content-Type: application/json' \
@@ -101,14 +113,16 @@ curl -sN -X POST localhost:8000/api/ask/stream -H 'Content-Type: application/jso
 ```
 
 The stream sends a `conversation` event first, then a `step` event for each query, table
-lookup and definition lookup, then either `answer`, with the same body `/api/ask` returns,
-or `error`. It is a POST, so a browser reads it with `fetch` rather than `EventSource`.
+lookup and definition lookup, then `answer_delta` events while the model writes the answer,
+then either `answer`, with the same body `/api/ask` returns, or `error`. Each
+`answer_delta` carries the headline and findings written so far. It is a draft: unchecked,
+and without citations, definitions or dates, which come only with `answer`. It is a POST, so a browser reads it with `fetch` rather than `EventSource`.
 A question keeps running if the reader disconnects, so its answer still reaches the log and
 the conversation.
 
 Errors come back as `{"error": kind, "message": text}`. A question the agent could not
 answer is a 422, and a failure at the Anthropic API is a 502 or 503. An unknown or expired
-conversation is a 404. The agent runs in a worker thread, so a slow question does not
+deleted conversation is a 404. The agent runs in a worker thread, so a slow question does not
 block other requests.
 
 ### Access and limits
@@ -129,8 +143,9 @@ A question is refused with a 429, before the model is called, when:
 A question still running counts against both budgets with a 60,000 token reservation until
 it finishes. Request bodies over 16 KB get a 413. Every request, including a refused one, is
 appended to `logs/requests.jsonl` without its body or token. Only the origins in
-`SQL_AGENT_CORS_ORIGINS` may call the service from a browser. The limits and conversations
-live in memory, so run one server process. See `docs/security.md` for what remains a risk.
+`SQL_AGENT_CORS_ORIGINS` may call the service from a browser. The daily budget and the
+record of which conversations are answering live in memory, so run one server process. A
+conversation's own spending is stored with it. See `docs/security.md` for what remains a risk.
 
 ## The semantic layer
 
@@ -238,6 +253,8 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `SQL_AGENT_DAILY_TOKEN_BUDGET` | `5000000` | Model tokens the service may spend per UTC day. |
 | `SQL_AGENT_CONVERSATION_TOKEN_BUDGET` | `1000000` | Model tokens one conversation may spend. |
 | `SQL_AGENT_REQUEST_LOG_PATH` | `logs/requests.jsonl` | Where each HTTP request is logged. `off` disables it. |
+| `SQL_AGENT_CONVERSATIONS_PATH` | `data/conversations.db` | Where conversations are stored. `off` keeps them in memory. |
+| `SQL_AGENT_STORE_RESULT_ROWS` | `true` | Whether a stored answer keeps the rows its queries returned. |
 
 ## Layout
 
@@ -249,7 +266,7 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `main.py` | Command line entry point for asking a question. |
 | `sql_agent/service.py` | The HTTP service, a thin layer over the agent. |
 | `sql_agent/serve.py` | Runs the service. |
-| `sql_agent/conversations.py` | Holds each conversation's recent turns for follow-up questions. |
+| `sql_agent/conversations.py` | Stores conversations in SQLite: every answer for the interface, and the recent turns a follow-up is shown. |
 | `sql_agent/limits.py` | Concurrency and token budgets for the service. |
 | `sql_agent/requestlog.py` | Logs each HTTP request. |
 | `sql_agent/agent.py` | The agent loop, and the reusable core a web service will call. |

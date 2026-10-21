@@ -17,6 +17,7 @@ venv/
 
 # --- Generated data (rebuild with the loader script) ---
 Backend/synthea.db
+Backend/data/conversations.db
 *.db-journal
 *.db-wal
 *.db-shm
