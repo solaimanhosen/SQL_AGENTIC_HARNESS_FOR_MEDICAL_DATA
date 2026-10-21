@@ -12,7 +12,8 @@ Run it from the Backend folder:
 The agent runs in a worker thread, so a slow question does not block health checks or
 other requests. Questions belong to a conversation, so a follow-up such as "what about
 heart disease?" is understood, and `/api/ask/stream` sends each step as it happens, then
-the answer as it is written. Conversations are stored, so they can be listed and reopened.
+the answer as it is written. Conversations are stored, so they can be listed and reopened,
+and any stored answer can be downloaded as a self-contained HTML report.
 
 When a shared token is configured, every endpoint except health requires it. Request bodies
 are capped, and the limits in limits.py refuse a question before it reaches the model when
@@ -27,8 +28,8 @@ import logging
 import secrets
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from datetime import date, datetime
-from typing import Any, Literal
+from datetime import date, datetime, timezone
+from typing import Literal
 
 import anthropic
 import anyio
@@ -44,8 +45,7 @@ from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .agent import AgentError, AgentResult, SqlAgent, Turn, describe_failure
-from .answer import Draft, describe_window
-from .charts import Chart
+from .answer import Draft
 from .conversations import (
     MAX_TITLE_CHARS,
     ConversationBusy,
@@ -55,9 +55,9 @@ from .conversations import (
 )
 from .limits import LimitExceeded, Reservation, SpendingLimits
 from .requestlog import RequestLogMiddleware
+from .payload import AnswerOut, DefinitionOut, answer_payload, definition_payload
+from .report import CONTENT_SECURITY_POLICY, render_report, report_filename
 from .runlog import log_run
-from .semantic import SemanticLayer, window_bounds
-from .tools import AnalysisInfo, QueryRecord
 
 MAX_QUESTION_CHARS = 2_000
 # A question of the longest allowed length, in any script, fits well inside this.
@@ -78,105 +78,6 @@ class AskRequest(BaseModel):
         pattern=CONVERSATION_ID_PATTERN,
         description="Continue this conversation. Leave it out to start a new one.",
     )
-
-
-class FindingOut(BaseModel):
-    statement: str
-    query_numbers: list[int]
-
-
-class DefinitionOut(BaseModel):
-    name: str
-    label: str
-    status: Literal["confirmed", "assumed", "unknown"]
-    """unknown means the model named a definition that does not exist."""
-    summary: str
-
-
-class TimeWindowOut(BaseModel):
-    months: int | None
-    start: date | None
-    end: date | None
-    description: str
-    """The window as the command line shows it, with the dates computed here."""
-
-
-class AnalysisOut(BaseModel):
-    tool: Literal["summarize", "trend", "compare_groups"]
-    label: str
-    """A short description, such as "trend by month over 5,571 rows"."""
-    parameters: dict[str, Any]
-    source_rows: int
-    """Rows the SQL returned. The query's own rows are the table computed from them."""
-    summary: list[str]
-    """What the computed table shows. Every figure in it was computed by the service."""
-
-
-class QueryOut(BaseModel):
-    number: int | None
-    sql: str
-    ok: bool
-    row_count: int | None
-    elapsed_ms: float | None
-    truncated: bool
-    error: str | None
-    columns: list[str]
-    rows: list[list[Any]]
-    analysis: AnalysisOut | None = None
-    """Set when an analytics tool produced this result. Answers stored before it existed lack it."""
-
-
-class IssuesOut(BaseModel):
-    any: bool
-    unknown_definitions: list[str]
-    missing_query_numbers: list[int]
-    unsupported_findings: list[str]
-    window_not_in_sql: str | None
-    chart_problems: list[str] = []
-    """Charts asked for that could not be drawn from the run, each with its reason."""
-
-
-class SeriesOut(BaseModel):
-    name: str
-    values: list[float | None]
-    """One value per category, in the order of the chart's x. None is a gap."""
-
-
-class ChartOut(BaseModel):
-    kind: Literal["bar", "line"]
-    title: str
-    """Written by the model. Every value is read from the cited query's rows."""
-    query_number: int
-    x_label: str
-    y_label: str
-    x: list[str]
-    series: list[SeriesOut]
-
-
-class AnswerOut(BaseModel):
-    conversation_id: str
-    turn: int
-    """The position of this question in its conversation, starting at 1."""
-    question: str
-    answer: str
-    """The rendered answer, the same text the command line prints."""
-    structured: bool
-    """False when the model answered in prose, so only `answer` is filled in."""
-    headline: str | None
-    findings: list[FindingOut]
-    definitions_used: list[DefinitionOut]
-    time_window: TimeWindowOut | None
-    assumptions: list[str]
-    caveats: list[str]
-    queries: list[QueryOut]
-    issues: IssuesOut
-    charts: list[ChartOut] = []
-    """Drawn only from the run. Answers stored before charts existed have none."""
-    as_of: date
-    model: str
-    elapsed_s: float
-    input_tokens: int
-    output_tokens: int
 
 
 class HealthOut(BaseModel):
@@ -400,6 +301,33 @@ def create_app(
                 for turn in stored.turns
                 if turn.answer is not None
             ],
+        )
+
+    @protected.get(
+        "/api/conversations/{conversation_id}/turns/{turn}/report",
+        response_class=Response,
+        responses={200: {"content": {"text/html": {}}, "description": "A self-contained HTML report, as a download."}},
+    )
+    def report(conversation_id: str = ConversationId, turn: int = Path(ge=1)) -> Response:
+        """One stored answer as an HTML file that opens with no network."""
+        stored = conversations.get(conversation_id)
+        found = next((item for item in stored.turns if item.turn == turn and item.answer is not None), None)
+        if found is None:
+            return _error(404, "unknown_turn", f"This conversation has no answered question {turn}.")
+        answer = AnswerOut.model_validate(found.answer)
+        html = render_report(
+            answer,
+            generated_at=datetime.now(timezone.utc),
+            earlier_questions=[item.question for item in stored.turns if item.turn < turn],
+        )
+        return Response(
+            content=html,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{report_filename(answer)}"',
+                "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     @protected.patch("/api/conversations/{conversation_id}")
@@ -652,108 +580,3 @@ def schema_payload(agent: SqlAgent) -> list[TableOut]:
             )
         )
     return tables
-
-
-def definition_payload(layer: SemanticLayer, name: str) -> DefinitionOut:
-    """A definition as recorded in the semantic layer, or marked unknown if it is not there."""
-    definition = layer.definitions.get(name.lower())
-    if definition is None:
-        return DefinitionOut(name=name, label=name, status="unknown", summary="")
-    return DefinitionOut(
-        name=definition.name,
-        label=definition.label,
-        status="confirmed" if definition.status == "confirmed" else "assumed",
-        summary=definition.summary,
-    )
-
-
-def answer_payload(result: AgentResult, layer: SemanticLayer, *, conversation_id: str, turn: int) -> AnswerOut:
-    structured = result.structured
-    time_window = None
-    if structured is not None:
-        window = structured.time_window
-        start = end = None
-        if window.months:
-            start, end = window_bounds(result.as_of, window.months)
-        time_window = TimeWindowOut(
-            months=window.months or None,
-            start=start,
-            end=end,
-            description=describe_window(window, result.as_of),
-        )
-    issues = result.issues
-    return AnswerOut(
-        conversation_id=conversation_id,
-        turn=turn,
-        question=result.question,
-        answer=result.answer,
-        structured=structured is not None,
-        headline=structured.headline if structured else None,
-        findings=[
-            FindingOut(statement=finding.statement, query_numbers=finding.query_numbers)
-            for finding in (structured.findings if structured else [])
-        ],
-        definitions_used=[definition_payload(layer, name) for name in (structured.definitions_used if structured else [])],
-        time_window=time_window,
-        assumptions=list(structured.assumptions) if structured else [],
-        caveats=list(structured.caveats) if structured else [],
-        queries=[query_payload(record) for record in result.queries],
-        issues=IssuesOut(
-            any=issues.any,
-            unknown_definitions=list(issues.unknown_definitions),
-            missing_query_numbers=list(issues.missing_query_numbers),
-            unsupported_findings=list(issues.unsupported_findings),
-            window_not_in_sql=issues.window_not_in_sql,
-            chart_problems=list(issues.chart_problems),
-        ),
-        charts=[chart_payload(chart) for chart in result.charts],
-        as_of=result.as_of,
-        model=result.model,
-        elapsed_s=round(result.elapsed_s, 2),
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-    )
-
-
-def chart_payload(chart: Chart) -> ChartOut:
-    return ChartOut(
-        kind=chart.kind,
-        title=chart.title,
-        query_number=chart.query_number,
-        x_label=chart.x_label,
-        y_label=chart.y_label,
-        x=list(chart.x),
-        series=[SeriesOut(name=series.name, values=list(series.values)) for series in chart.series],
-    )
-
-
-def query_payload(record: QueryRecord) -> QueryOut:
-    return QueryOut(
-        number=record.number,
-        sql=record.sql,
-        ok=record.ok,
-        row_count=record.row_count,
-        elapsed_ms=record.elapsed_ms,
-        truncated=record.truncated,
-        error=record.error,
-        columns=list(record.columns),
-        rows=[[_cell(value) for value in row] for row in record.rows],
-        analysis=analysis_payload(record.analysis) if record.analysis else None,
-    )
-
-
-def analysis_payload(info: AnalysisInfo) -> AnalysisOut:
-    return AnalysisOut(
-        tool=info.tool,
-        label=info.describe(),
-        parameters=dict(info.parameters),
-        source_rows=info.source_rows,
-        summary=list(info.summary),
-    )
-
-
-def _cell(value: Any) -> Any:
-    """SQLite values as JSON. Binary values are described rather than sent."""
-    if isinstance(value, (bytes, bytearray, memoryview)):
-        return f"<{len(value)} bytes>"
-    return value

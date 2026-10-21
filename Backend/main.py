@@ -5,6 +5,7 @@ Run from the Backend folder:
     .venv/bin/python main.py "How many diabetic patients had an ER visit?"
     .venv/bin/python main.py --verbose "Compare ER visits for diabetic and other patients"
     .venv/bin/python main.py --json "Which age band has the most hospital visits?"
+    .venv/bin/python main.py --report visits.html "Show hospital visits by month"
 
 Every run is appended to logs/runs.jsonl unless --no-log is given.
 """
@@ -14,12 +15,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
 import anthropic
 
 from sql_agent.agent import AgentError, AgentResult, SqlAgent, describe_failure
 from sql_agent.config import ConfigError
 from sql_agent.formatting import format_table
+from sql_agent.payload import answer_payload
+from sql_agent.report import render_report
 from sql_agent.runlog import build_record, log_run
 
 
@@ -96,6 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-sql", action="store_true", help="hide the SQL behind the answer")
     parser.add_argument("--json", action="store_true", help="print the whole run as JSON instead")
     parser.add_argument("--no-log", action="store_true", help="do not append this run to the log")
+    parser.add_argument(
+        "--report", metavar="FILE", type=Path, help="also write the answer as a self-contained HTML report"
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -124,6 +132,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         log_run(result, log_path)
 
+    if args.report is not None:
+        write_report(result, agent, args.report)
+
     if args.json:
         print(json.dumps(build_record(result), indent=2, ensure_ascii=False))
         return 0
@@ -131,7 +142,17 @@ def main(argv: list[str] | None = None) -> int:
     print_result(result, show_sql=not args.no_sql)
     if log_path is not None:
         print(f"Logged to {log_path}")
+    if args.report is not None:
+        print(f"Report written to {args.report}")
     return 0
+
+
+def write_report(result: AgentResult, agent: SqlAgent, path: Path) -> None:
+    """The same report the service offers for a stored answer, for a question asked here."""
+    answer = answer_payload(result, agent.layer, conversation_id="", turn=1)
+    html = render_report(answer, generated_at=datetime.now(timezone.utc))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(html, encoding="utf-8")
 
 
 if __name__ == "__main__":

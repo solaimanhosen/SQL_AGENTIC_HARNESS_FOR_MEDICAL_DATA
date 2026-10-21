@@ -15,7 +15,8 @@ from sql_agent.conversations import ConversationStore
 from sql_agent.limits import SpendingLimits
 from sql_agent.db import ReadOnlyDatabase
 from sql_agent.semantic import load_semantic_layer
-from sql_agent.service import MAX_QUESTION_CHARS, answer_payload, create_app
+from sql_agent.payload import answer_payload
+from sql_agent.service import MAX_QUESTION_CHARS, create_app
 from sql_agent.tools import AnalysisInfo, QueryRecord
 
 AS_OF = date(2026, 8, 16)
@@ -669,3 +670,43 @@ def test_the_browser_may_rename_and_delete_from_the_configured_origin(settings, 
             headers={"Origin": "http://localhost:4200", "Access-Control-Request-Method": method},
         )
         assert response.status_code == 200 and method in response.headers["access-control-allow-methods"]
+
+
+def test_a_stored_answer_downloads_as_a_self_contained_report(settings, db):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    response = client.get(f"/api/conversations/{conversation_id}/turns/1/report")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    assert response.headers["content-disposition"] == f'attachment; filename="{conversation_id[:8]}-turn1-report.html"'
+    assert response.headers["content-security-policy"] == "default-src 'none'; style-src 'unsafe-inline'"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "<h1>How many have diabetes?</h1>" in response.text
+    assert "Eight patients have diabetes." in response.text
+    assert "A follow-up." not in response.text
+
+
+def test_a_follow_ups_report_names_the_questions_before_it(settings, db):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    _ask(client, "And heart disease?", conversation_id)
+    html = client.get(f"/api/conversations/{conversation_id}/turns/2/report").text
+    assert "<h1>And heart disease?</h1>" in html
+    assert "<li>How many have diabetes?</li>" in html
+
+
+def test_a_report_for_a_question_that_was_not_answered_is_refused(settings, db):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    missing = client.get(f"/api/conversations/{conversation_id}/turns/2/report")
+    assert missing.status_code == 404 and missing.json()["error"] == "unknown_turn"
+    assert client.get(f"/api/conversations/{conversation_id}/turns/0/report").status_code == 422
+    assert client.get(f"/api/conversations/{'f' * 32}/turns/1/report").json()["error"] == "unknown_conversation"
+
+
+def test_a_report_requires_the_token(settings, db):
+    client, _ = _client(settings, db, api_token=TOKEN)
+    conversation_id = _ask(client, headers=AUTH)["conversation_id"]
+    path = f"/api/conversations/{conversation_id}/turns/1/report"
+    assert client.get(path).status_code == 401
+    assert client.get(path, headers=AUTH).status_code == 200
