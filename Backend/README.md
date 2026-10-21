@@ -18,8 +18,9 @@ Open `Backend/.env` and paste your Anthropic API key after `ANTHROPIC_API_KEY=`.
 git-ignored. Then check the setup:
 
 ```bash
-.venv/bin/python -m sql_agent.check_setup            # includes one small Claude call
-.venv/bin/python -m sql_agent.check_setup --offline  # everything except the Claude call
+.venv/bin/python -m sql_agent.check_setup               # includes one small Claude call
+.venv/bin/python -m sql_agent.check_setup --all-models  # one small call to every model offered
+.venv/bin/python -m sql_agent.check_setup --offline     # no Anthropic API calls at all
 ```
 
 ## Building the database
@@ -98,10 +99,11 @@ curl -s -X POST localhost:8000/api/ask -H 'Content-Type: application/json' \
 | GET | `/api/schema` | The documented tables and columns. Identity columns never appear. |
 | GET | `/api/definitions` | Every shared definition with its confirmation status. |
 | GET | `/api/usage` | Questions running now and tokens spent today against the daily budget. |
-| POST | `/api/ask` | The answer, its findings, the SQL with its rows, and any traceability warnings. |
+| POST | `/api/ask` | The answer, its findings, the SQL with its rows, and any traceability warnings. Optional `model` and `effort` choose what answers this question; anything not in `/api/models` is a 422. |
 | POST | `/api/ask/stream` | The same answer, preceded by each step as it happens and by the answer text as it is written, as server-sent events. |
 | GET | `/api/conversations` | Stored conversations with at least one answer, most recently used first. With `?q=text`, only those whose title or any question contains it, at most 50. |
 | GET | `/api/conversations/{id}` | One conversation: every question with its answer and steps as first sent, and whether it is still answering. |
+| GET | `/api/models` | The models a question may run on, in the picker's order, with prices, effort levels and evaluation status, and the default model and effort. |
 | PATCH | `/api/conversations/{id}` | Rename it with `{"title": "..."}` (1 to 100 characters), pin or unpin it with `{"pinned": true}`, or both. Neither counts as use. |
 | DELETE | `/api/conversations/{id}` | Delete it and its answers. A conversation still answering gets a 409. |
 | GET | `/api/conversations/{id}/turns/{turn}/report` | One stored answer as a self-contained HTML report, as a download. |
@@ -217,6 +219,7 @@ change in the data is caught before the agent is asked anything.
 .venv/bin/python -m sql_agent.evaluate --dry-run          # check the golden SQL only, free
 .venv/bin/python -m sql_agent.evaluate                    # score the agent, costs money
 .venv/bin/python -m sql_agent.evaluate --category safety  # just the safety questions
+.venv/bin/python -m sql_agent.evaluate --model claude-haiku-5-5 --effort low  # another model
 ```
 
 Results and known limitations are in [Documents/evaluation.md](../Documents/evaluation.md).
@@ -264,8 +267,8 @@ All settings are optional environment variables, read from the shell or from `Ba
 | Variable | Default | Meaning |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | none | Required for Claude calls. Never commit it. |
-| `SQL_AGENT_MODEL` | `claude-opus-5` | Claude model ID. |
-| `SQL_AGENT_EFFORT` | `high` | Reasoning effort: `low`, `medium`, `high`, `xhigh` or `max`. |
+| `SQL_AGENT_MODEL` | `claude-opus-5` | The default model, used when a question names none. Must be one in `sql_agent/models.py`. |
+| `SQL_AGENT_EFFORT` | `high` | The default model's effort: `low`, `medium`, `high`, `xhigh` or `max`. |
 | `SQL_AGENT_MAX_TOKENS` | `16000` | Output token limit per model call. |
 | `SQL_AGENT_DB_PATH` | `synthea.db` | Database path. Relative paths resolve against `Backend`. |
 | `SQL_AGENT_CSV_DIR` | `data/synthea` | Source CSV folder read by the loader. |
@@ -289,7 +292,8 @@ All settings are optional environment variables, read from the shell or from `Ba
 | Path | Purpose |
 |---|---|
 | `sql_agent/config.py` | Loads and validates settings. |
-| `sql_agent/llm.py` | Builds the Claude chat model. |
+| `sql_agent/models.py` | The models people may choose, with prices and effort levels. Edited by hand; see ADR 0005. |
+| `sql_agent/llm.py` | Builds the Claude chat model for one question's model and effort. |
 | `sql_agent/check_setup.py` | Setup check script. |
 | `main.py` | Command line entry point for asking a question. |
 | `sql_agent/service.py` | The HTTP service, a thin layer over the agent. |

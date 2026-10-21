@@ -55,6 +55,7 @@ from .conversations import (
     UnknownConversation,
 )
 from .limits import LimitExceeded, Reservation, SpendingLimits
+from .models import ModelChoiceError, available_models, resolve_choice
 from .requestlog import RequestLogMiddleware
 from .payload import AnswerOut, DefinitionOut, answer_payload, definition_payload
 from .report import CONTENT_SECURITY_POLICY, render_report, report_filename
@@ -79,6 +80,32 @@ class AskRequest(BaseModel):
         pattern=CONVERSATION_ID_PATTERN,
         description="Continue this conversation. Leave it out to start a new one.",
     )
+    model: str | None = Field(
+        default=None, max_length=64, description="A model id from /api/models. Leave it out for the default."
+    )
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
+        default=None, description="Leave it out for the model's default."
+    )
+
+
+class ModelOut(BaseModel):
+    id: str
+    label: str
+    description: str
+    input_price: float
+    """USD per million input tokens, at the base rate."""
+    output_price: float
+    """USD per million output tokens, at the base rate."""
+    efforts: list[str]
+    default_effort: str
+    evaluated: str | None
+    """The evaluation result on this model, or null if it has not been evaluated."""
+
+
+class ModelsOut(BaseModel):
+    default_model: str
+    default_effort: str
+    models: list[ModelOut]
 
 
 class HealthOut(BaseModel):
@@ -118,6 +145,9 @@ class ConversationOut(BaseModel):
     """Questions answered in it so far."""
     pinned_at: datetime | None = None
     """When it was pinned, or nothing if it is not."""
+    last_model: str | None = None
+    """The model of its latest answer, so a reopened conversation continues with it."""
+    last_effort: str | None = None
 
 
 class StoredTurnOut(BaseModel):
@@ -261,6 +291,10 @@ def create_app(
             message = str(exc.detail)
         return _error(exc.status_code, kind, message)
 
+    @app.exception_handler(ModelChoiceError)
+    async def model_choice(_: Request, exc: ModelChoiceError) -> JSONResponse:
+        return _error(422, "model_choice", str(exc))
+
     @app.exception_handler(UnknownConversation)
     async def unknown_conversation(_: Request, exc: UnknownConversation) -> JSONResponse:
         return _error(404, "unknown_conversation", "This conversation was deleted or never existed. Start a new one.")
@@ -363,10 +397,32 @@ def create_app(
         conversations.delete(conversation_id)
         return Response(status_code=204)
 
+    @protected.get("/api/models")
+    def models() -> ModelsOut:
+        """The models a question may run on, in the order to offer them, and the default."""
+        return ModelsOut(
+            default_model=agent.settings.model,
+            default_effort=agent.settings.effort,
+            models=[
+                ModelOut(
+                    id=option.id,
+                    label=option.label,
+                    description=option.description,
+                    input_price=option.input_price,
+                    output_price=option.output_price,
+                    efforts=list(option.efforts),
+                    default_effort=agent.settings.effort if option.id == agent.settings.model else option.default_effort,
+                    evaluated=option.evaluated,
+                )
+                for option in available_models(admin=False)
+            ],
+        )
+
     @protected.post("/api/ask")
     async def ask(request: AskRequest) -> AnswerOut:
+        choice = _choose(agent, request)
         claim = _claim(conversations, limits, request.conversation_id)
-        return await _run(agent, conversations, limits, claim, request.question)
+        return await _run(agent, conversations, limits, claim, request.question, choice=choice)
 
     @protected.post(
         "/api/ask/stream",
@@ -376,9 +432,10 @@ def create_app(
     async def ask_stream(request: AskRequest) -> StreamingResponse:
         # Claim the conversation and start the run before the stream starts, so an unknown
         # or busy conversation is an ordinary error response, and a reader that never
-        # arrives cannot leave the conversation claimed.
+        # arrives cannot leave the conversation claimed. The model choice is checked first.
+        choice = _choose(agent, request)
         claim = _claim(conversations, limits, request.conversation_id)
-        events = _start(agent, conversations, limits, claim, request.question, background)
+        events = _start(agent, conversations, limits, claim, request.question, background, choice)
         return StreamingResponse(
             _relay(events, claim.conversation_id, claim.turn),
             media_type="text/event-stream",
@@ -405,6 +462,26 @@ class DeclaredLengthLimit:
                 await response(scope, receive, send)
                 return
         await self.app(scope, receive, send)
+
+
+@dataclass(frozen=True)
+class _Choice:
+    """The model and effort one question runs with, already checked against the catalog."""
+
+    model: str
+    effort: str
+
+
+def _choose(agent: SqlAgent, request: AskRequest) -> _Choice:
+    """Check the model and effort asked for. Accounts arrive later; until then nobody is an admin."""
+    option, effort = resolve_choice(
+        request.model,
+        request.effort,
+        default_model=agent.settings.model,
+        default_effort=agent.settings.effort,
+        admin=False,
+    )
+    return _Choice(option.id, effort)
 
 
 @dataclass(frozen=True)
@@ -448,6 +525,8 @@ async def _run(
     question: str,
     on_event: Callable[[str, str], None] | None = None,
     on_draft: Callable[[Draft], None] | None = None,
+    *,
+    choice: _Choice,
 ) -> AnswerOut:
     """Answer one claimed question, then store it, release its conversation and settle its budget."""
     result = answer = None
@@ -460,7 +539,7 @@ async def _run(
 
     try:
         result = await anyio.to_thread.run_sync(
-            _answer_and_log, agent, question, claim.history, claim.conversation_id, record_step, on_draft
+            _answer_and_log, agent, question, claim.history, claim.conversation_id, record_step, on_draft, choice
         )
         answer = answer_payload(result, agent.layer, conversation_id=claim.conversation_id, turn=claim.turn)
         return answer
@@ -475,6 +554,8 @@ async def _run(
                 steps=steps,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
+                model=result.model,
+                effort=result.effort,
             )
         limits.settle(claim.reservation, result.input_tokens + result.output_tokens if result else None)
 
@@ -487,6 +568,8 @@ def _conversation_out(summary: ConversationSummary) -> ConversationOut:
         updated_at=summary.updated_at,
         turns=summary.turn_count,
         pinned_at=summary.pinned_at,
+        last_model=summary.last_model,
+        last_effort=summary.last_effort,
     )
 
 
@@ -506,8 +589,11 @@ def _answer_and_log(
     conversation_id: str,
     on_event: Callable[[str, str], None] | None,
     on_draft: Callable[[Draft], None] | None,
+    choice: _Choice,
 ) -> AgentResult:
-    result = agent.answer(question, history=history, on_event=on_event, on_draft=on_draft)
+    result = agent.answer(
+        question, history=history, on_event=on_event, on_draft=on_draft, model=choice.model, effort=choice.effort
+    )
     if agent.settings.log_path is not None:
         log_run(result, agent.settings.log_path, conversation_id=conversation_id)
     return result
@@ -520,6 +606,7 @@ def _start(
     claim: _Claim,
     question: str,
     background: set[asyncio.Task],
+    choice: _Choice,
 ) -> asyncio.Queue[tuple[str, dict]]:
     """Run the question as its own task, returning the queue its events arrive on.
 
@@ -545,7 +632,7 @@ def _start(
 
     async def run() -> None:
         try:
-            answer = await _run(agent, conversations, limits, claim, question, on_event, on_draft)
+            answer = await _run(agent, conversations, limits, claim, question, on_event, on_draft, choice=choice)
             events.put_nowait(("answer", answer.model_dump(mode="json")))
         except (AgentError, anthropic.APIError) as exc:
             status, kind, message = _failure(exc)

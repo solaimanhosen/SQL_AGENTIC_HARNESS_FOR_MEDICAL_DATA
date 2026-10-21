@@ -14,6 +14,7 @@ safety questions, that the database is untouched.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
 import time
@@ -29,6 +30,7 @@ from .agent import AgentResult, SqlAgent
 from .answer import numbers_in
 from .config import BACKEND_DIR, ConfigError, load_settings
 from .db import ReadOnlyDatabase
+from .models import CATALOG, VALID_EFFORTS, ModelChoiceError, estimate_cost, resolve_choice
 
 DEFAULT_QUESTIONS_PATH = BACKEND_DIR / "evals" / "questions.yaml"
 DEFAULT_RESULTS_DIR = BACKEND_DIR / "evals" / "results"
@@ -253,6 +255,7 @@ class EvalReport:
     elapsed_s: float
     model: str
     as_of: str
+    effort: str = ""
 
     @property
     def passed(self) -> int:
@@ -279,6 +282,7 @@ class EvalReport:
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "model": self.model,
+            "effort": self.effort,
             "as_of": self.as_of,
             "score": {
                 "passed": self.passed,
@@ -290,6 +294,13 @@ class EvalReport:
             "elapsed_s": round(self.elapsed_s, 1),
             "input_tokens": sum(case.tokens[0] for case in self.results),
             "output_tokens": sum(case.tokens[1] for case in self.results),
+            "estimated_cost_usd": _rounded(
+                estimate_cost(
+                    self.model,
+                    sum(case.tokens[0] for case in self.results),
+                    sum(case.tokens[1] for case in self.results),
+                )
+            ),
             "cases": [
                 {
                     "id": case.case.id,
@@ -325,8 +336,9 @@ class EvalReport:
         for name, (passed, total) in sorted(self.dimension_totals().items()):
             lines.append(f"  {name:<20} {passed}/{total}")
         data = self.to_dict()
+        dollars = f", about ${data['estimated_cost_usd']:.2f}" if data["estimated_cost_usd"] is not None else ""
         lines.append(
-            f"Cost: {data['input_tokens']:,} in and {data['output_tokens']:,} out tokens "
+            f"Cost: {data['input_tokens']:,} in and {data['output_tokens']:,} out tokens{dollars} "
             f"over {self.elapsed_s / 60:.1f} minutes"
         )
         return "\n".join(lines)
@@ -366,8 +378,13 @@ def run_evaluation(
         results=results,
         elapsed_s=time.perf_counter() - started,
         model=agent.settings.model,
+        effort=agent.settings.effort,
         as_of=str(agent.as_of),
     )
+
+
+def _rounded(value: float | None) -> float | None:
+    return None if value is None else round(value, 2)
 
 
 def _print_case(case_result: CaseResult) -> None:
@@ -393,13 +410,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, help="stop after this many questions")
     parser.add_argument("--questions", type=Path, default=DEFAULT_QUESTIONS_PATH, help="the question file")
     parser.add_argument("--out", type=Path, help="where to write the JSON report")
+    parser.add_argument(
+        "--model",
+        choices=[option.id for option in CATALOG],
+        help="run on this model instead of SQL_AGENT_MODEL, to compare models",
+    )
+    parser.add_argument("--effort", choices=VALID_EFFORTS, help="run at this effort instead of SQL_AGENT_EFFORT")
     args = parser.parse_args(argv)
 
     try:
         settings = load_settings()
-    except ConfigError as exc:
+        # Whoever runs the evaluation operates the service, so every model is open to them.
+        option, effort = resolve_choice(
+            args.model, args.effort, default_model=settings.model, default_effort=settings.effort, admin=True
+        )
+    except (ConfigError, ModelChoiceError) as exc:
         print(f"Settings error: {exc}", file=sys.stderr)
         return 1
+    settings = dataclasses.replace(settings, model=option.id, effort=effort)
 
     db = ReadOnlyDatabase.from_settings(settings)
     cases = load_cases(args.questions)
@@ -424,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     agent = SqlAgent(settings)
-    print(f"Asking {agent.settings.model}, as-of date {agent.as_of}\n")
+    print(f"Asking {agent.settings.model} at {agent.settings.effort} effort, as-of date {agent.as_of}\n")
     report = run_evaluation(cases, agent, db, on_case=_print_case)
     print(report.summary_text())
 

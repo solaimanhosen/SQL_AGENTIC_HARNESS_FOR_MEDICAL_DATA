@@ -138,3 +138,9 @@ def test_conversations_are_stored_by_default_and_can_be_kept_in_memory():
     assert s.conversations_path == BACKEND_DIR / "data" / "conversations.db" and s.store_result_rows is True
     s = load_settings({"SQL_AGENT_CONVERSATIONS_PATH": "off", "SQL_AGENT_STORE_RESULT_ROWS": "false"})
     assert s.conversations_path is None and s.store_result_rows is False
+
+
+def test_the_default_model_must_be_one_the_picker_offers():
+    assert load_settings({"SQL_AGENT_MODEL": "claude-sonnet-5-5"}).model == "claude-sonnet-5-5"
+    with pytest.raises(ConfigError, match="SQL_AGENT_MODEL"):
+        load_settings({"SQL_AGENT_MODEL": "claude-2"})

@@ -46,6 +46,7 @@ def build_record(result: "AgentResult", *, conversation_id: str | None = None) -
         "issues": asdict(result.issues),
         "as_of": str(result.as_of),
         "model": result.model,
+        "effort": result.effort,
         "elapsed_s": round(result.elapsed_s, 2),
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,

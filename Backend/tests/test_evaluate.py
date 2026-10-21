@@ -203,7 +203,7 @@ def test_an_api_outage_is_not_counted_as_a_wrong_answer(real_db):
     from sql_agent.evaluate import run_evaluation
 
     class BrokenAgent:
-        settings = type("S", (), {"model": "claude-opus-5"})()
+        settings = type("S", (), {"model": "claude-opus-5", "effort": "high"})()
         as_of = date(2026, 8, 16)
 
         def answer(self, question, *, history=()):
@@ -220,7 +220,7 @@ def test_a_wrong_answer_is_still_counted_as_a_failure(real_db):
     from sql_agent.evaluate import run_evaluation
 
     class ConfusedAgent:
-        settings = type("S", (), {"model": "claude-opus-5"})()
+        settings = type("S", (), {"model": "claude-opus-5", "effort": "high"})()
         as_of = date(2026, 8, 16)
 
         def answer(self, question, *, history=()):
@@ -234,7 +234,7 @@ def test_a_follow_up_case_asks_its_earlier_questions_first_in_one_conversation(r
     from sql_agent.evaluate import run_evaluation
 
     class RecordingAgent:
-        settings = type("S", (), {"model": "claude-opus-5"})()
+        settings = type("S", (), {"model": "claude-opus-5", "effort": "high"})()
         as_of = date(2026, 8, 16)
 
         def __init__(self):

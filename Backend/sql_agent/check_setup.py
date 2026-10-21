@@ -1,8 +1,9 @@
 """Setup check: Python version, settings, read-only database access, API key, and one live Claude call.
 
 Run from the Backend folder:
-    .venv/bin/python -m sql_agent.check_setup            # full check, makes one small API call
-    .venv/bin/python -m sql_agent.check_setup --offline  # skip the API call
+    .venv/bin/python -m sql_agent.check_setup               # full check, makes one small API call
+    .venv/bin/python -m sql_agent.check_setup --offline     # skip every API call
+    .venv/bin/python -m sql_agent.check_setup --all-models  # one small call to every model offered
 
 The API key value is never printed, only whether it is set.
 """
@@ -18,6 +19,7 @@ import anthropic
 
 from .config import ENV_FILE, ConfigError, Settings, load_settings
 from .llm import build_chat_model
+from .models import CATALOG
 
 MIN_PYTHON = (3, 10)
 PING_PROMPT = "This is a connectivity check. Reply with exactly: OK"
@@ -66,8 +68,48 @@ def check_api_key() -> bool:
     return False
 
 
-def check_live_call(settings: Settings) -> bool:
-    model = build_chat_model(settings)
+def catalog_problems(listed: list[dict]) -> list[str]:
+    """What the Models API says that disagrees with the catalog in models.py.
+
+    `listed` is the API's model list as dictionaries. Each model offered must be listed, must
+    accept adaptive thinking, and must accept every effort the picker offers for it.
+    """
+    by_id = {item["id"]: item for item in listed}
+    problems = []
+    for option in CATALOG:
+        item = by_id.get(option.id)
+        if item is None:
+            problems.append(f"{option.id} is not offered to this API key")
+            continue
+        capabilities = item.get("capabilities") or {}
+        thinking = (capabilities.get("thinking") or {}).get("types") or {}
+        if not (thinking.get("adaptive") or {}).get("supported"):
+            problems.append(f"{option.id} does not accept adaptive thinking")
+        effort = capabilities.get("effort") or {}
+        missing = [level for level in option.efforts if not (effort.get(level) or {}).get("supported")]
+        if missing:
+            problems.append(f"{option.id} does not accept effort {', '.join(missing)}")
+    return problems
+
+
+def check_model_catalog() -> bool:
+    """Every model the picker offers is available, with the efforts offered. No tokens are used."""
+    try:
+        listed = [model.model_dump() for model in anthropic.Anthropic().models.list(limit=100)]
+    except anthropic.APIError as exc:
+        _report("FAIL", "Models offered", f"the model list could not be read: {exc}")
+        return False
+    problems = catalog_problems(listed)
+    if problems:
+        _report("FAIL", "Models offered", "; ".join(problems))
+        return False
+    _report("PASS", "Models offered", f"all {len(CATALOG)} available with every effort offered")
+    return True
+
+
+def check_live_call(settings: Settings, model_id: str | None = None) -> bool:
+    model_id = model_id or settings.model
+    model = build_chat_model(settings, model=model_id)
     try:
         reply = model.invoke(PING_PROMPT)
     except anthropic.AuthenticationError:
@@ -75,7 +117,7 @@ def check_live_call(settings: Settings) -> bool:
     except anthropic.PermissionDeniedError:
         detail = "the API key is not allowed to use this model or feature"
     except anthropic.NotFoundError:
-        detail = f"model {settings.model!r} was not found for this API key"
+        detail = f"model {model_id!r} was not found for this API key"
     except anthropic.RateLimitError:
         detail = "rate limited; wait a minute and retry"
     except anthropic.BadRequestError as exc:
@@ -88,7 +130,7 @@ def check_live_call(settings: Settings) -> bool:
         meta = reply.response_metadata
         usage = reply.usage_metadata or {}
         stop_reason = meta.get("stop_reason")
-        served_by = meta.get("model_name") or meta.get("model") or settings.model
+        served_by = meta.get("model_name") or meta.get("model") or model_id
         if stop_reason == "refusal":
             _report("FAIL", "Claude call", f"{served_by} refused the connectivity prompt")
             return False
@@ -105,7 +147,10 @@ def check_live_call(settings: Settings) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check that the SQL agent backend is set up correctly.")
-    parser.add_argument("--offline", action="store_true", help="skip the live Claude API call")
+    parser.add_argument("--offline", action="store_true", help="skip every call to the Anthropic API")
+    parser.add_argument(
+        "--all-models", action="store_true", help="make the small live call on every model offered, not just the default"
+    )
     args = parser.parse_args(argv)
 
     results = [check_python()]
@@ -125,9 +170,12 @@ def main(argv: list[str] | None = None) -> int:
     results.append(key_ok)
 
     if args.offline:
+        _report("SKIP", "Models offered", "--offline")
         _report("SKIP", "Claude call", "--offline")
     elif key_ok:
-        results.append(check_live_call(settings))
+        results.append(check_model_catalog())
+        for model_id in [option.id for option in CATALOG] if args.all_models else [settings.model]:
+            results.append(check_live_call(settings, model_id))
     else:
         _report("SKIP", "Claude call", "no API key")
 

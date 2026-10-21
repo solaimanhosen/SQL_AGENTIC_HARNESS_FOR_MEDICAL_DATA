@@ -123,6 +123,16 @@ a sign the source text had been tampered with.
   group under 20, but still report it. A minimum group size is still a decision to make.
 - **The budget is counted in tokens, not money.** The figures in the evaluation give the
   cost of a typical question. Set the daily budget with the model's current price in mind.
+  Since people can choose the model, one budget now covers models whose prices differ
+  a hundredfold: a day's tokens on Haiku 5.5 cost far less than the same tokens on Opus.
+  The model and its price are in the catalog, so a budget in dollars is a small change when
+  it is needed.
+- **The model is chosen by the browser, from a list the service keeps.** The service refuses
+  any model or effort not in `sql_agent/models.py`, and any admin-only model, before
+  anything runs, so a caller cannot pick an unlisted or older model. Every model sends the
+  same thinking, effort and structured-output settings, so the same checks apply to every
+  answer. Only Opus 5 has been scored by the evaluation; the others are labelled "Not yet
+  evaluated" in the picker.
 - **Browser storage of the token is the interface's problem.** The web interface will need
   to keep the token somewhere, and wherever that is becomes something to protect.
 

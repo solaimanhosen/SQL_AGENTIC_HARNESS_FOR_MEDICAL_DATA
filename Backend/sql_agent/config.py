@@ -15,6 +15,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .models import CATALOG, VALID_EFFORTS, find_model
+
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = BACKEND_DIR / ".env"
 
@@ -36,7 +38,6 @@ DEFAULT_CONVERSATION_TOKEN_BUDGET = 1_000_000
 DEFAULT_CONVERSATIONS_PATH = "data/conversations.db"
 MIN_API_TOKEN_CHARS = 32
 
-VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MAX_OUTPUT_TOKENS = 128_000
 AS_OF_KEYWORDS = ("latest", "today")
 
@@ -93,9 +94,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         load_dotenv(ENV_FILE, override=False)
         env = os.environ
 
+    model = _parse_model(env.get("SQL_AGENT_MODEL", DEFAULT_MODEL))
     return Settings(
-        model=env.get("SQL_AGENT_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL,
-        effort=_parse_effort(env.get("SQL_AGENT_EFFORT", DEFAULT_EFFORT)),
+        model=model,
+        effort=_parse_effort(env.get("SQL_AGENT_EFFORT", DEFAULT_EFFORT), model),
         max_tokens=_parse_max_tokens(env.get("SQL_AGENT_MAX_TOKENS", str(DEFAULT_MAX_TOKENS))),
         db_path=_resolve_path(env.get("SQL_AGENT_DB_PATH", DEFAULT_DB_PATH)),
         csv_dir=_resolve_path(env.get("SQL_AGENT_CSV_DIR", DEFAULT_CSV_DIR)),
@@ -149,10 +151,22 @@ def load_api_token(env: Mapping[str, str] | None = None) -> str | None:
     return token
 
 
-def _parse_effort(raw: str) -> str:
+def _parse_model(raw: str) -> str:
+    """The default model, which must be in the catalog in models.py, so it is in the picker."""
+    value = raw.strip() or DEFAULT_MODEL
+    if find_model(value) is None:
+        offered = ", ".join(option.id for option in CATALOG)
+        raise ConfigError(f"SQL_AGENT_MODEL must be one of {offered}; got {raw!r}")
+    return value
+
+
+def _parse_effort(raw: str, model: str = DEFAULT_MODEL) -> str:
     value = raw.strip().lower()
     if value not in VALID_EFFORTS:
         raise ConfigError(f"SQL_AGENT_EFFORT must be one of {', '.join(VALID_EFFORTS)}; got {raw!r}")
+    option = find_model(model)
+    if option is not None and value not in option.efforts:
+        raise ConfigError(f"{option.label} does not offer {value} effort; choose one of {', '.join(option.efforts)}")
     return value
 
 

@@ -65,6 +65,9 @@ CREATE INDEX IF NOT EXISTS conversations_by_use ON conversations(updated_at);
 MIGRATIONS: tuple[str, ...] = (
     # 2: pinning. NULL means not pinned; otherwise when it was pinned, newest pin first.
     "ALTER TABLE conversations ADD COLUMN pinned_at TEXT;",
+    # 3: the model and effort of the latest answer, so reopening restores the picker.
+    "ALTER TABLE conversations ADD COLUMN last_model TEXT;"
+    " ALTER TABLE conversations ADD COLUMN last_effort TEXT;",
 )
 SCHEMA_VERSION = 1 + len(MIGRATIONS)
 
@@ -89,6 +92,8 @@ class ConversationSummary:
     updated_at: str
     turn_count: int
     pinned_at: str | None = None
+    last_model: str | None = None
+    last_effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -202,6 +207,8 @@ class ConversationStore:
         steps: list | None = None,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        model: str | None = None,
+        effort: str | None = None,
     ) -> None:
         """Release the conversation, storing the answered turn if there is one.
 
@@ -236,8 +243,9 @@ class ConversationStore:
                 )
                 self._db.execute(
                     "UPDATE conversations SET turn_count = ?, updated_at = ?, tokens_spent = tokens_spent + ?,"
-                    " title = CASE WHEN title = '' THEN ? ELSE title END WHERE id = ?",
-                    (number, now, input_tokens + output_tokens, title_from(turn.question), conversation_id),
+                    " title = CASE WHEN title = '' THEN ? ELSE title END,"
+                    " last_model = COALESCE(?, last_model), last_effort = COALESCE(?, last_effort) WHERE id = ?",
+                    (number, now, input_tokens + output_tokens, title_from(turn.question), model, effort, conversation_id),
                 )
 
     def tokens_spent(self, conversation_id: str) -> int:
@@ -368,4 +376,6 @@ def _summary(row: sqlite3.Row) -> ConversationSummary:
         updated_at=row["updated_at"],
         turn_count=row["turn_count"],
         pinned_at=row["pinned_at"],
+        last_model=row["last_model"],
+        last_effort=row["last_effort"],
     )

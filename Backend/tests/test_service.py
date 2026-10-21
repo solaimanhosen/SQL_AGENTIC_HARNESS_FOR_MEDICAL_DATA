@@ -22,7 +22,7 @@ from sql_agent.tools import AnalysisInfo, QueryRecord
 AS_OF = date(2026, 8, 16)
 
 
-def _result(question: str, history=()) -> AgentResult:
+def _result(question: str, history=(), model="claude-opus-5", effort="high") -> AgentResult:
     return AgentResult(
         question=question,
         answer="Eight patients have diabetes. [query 1]",
@@ -46,7 +46,8 @@ def _result(question: str, history=()) -> AgentResult:
             QueryRecord(sql="DROP TABLE conditions", error="UnsafeQueryError: only SELECT"),
         ),
         as_of=AS_OF,
-        model="claude-opus-5",
+        model=model,
+        effort=effort,
         elapsed_s=4.321,
         input_tokens=1200,
         output_tokens=150,
@@ -65,10 +66,12 @@ class StubAgent:
         self.fail_with = fail_with
         self.questions = []
         self.histories = []
+        self.choices = []
 
-    def answer(self, question, *, history=(), on_event=None, on_draft=None):
+    def answer(self, question, *, history=(), on_event=None, on_draft=None, model=None, effort=None):
         self.questions.append(question)
         self.histories.append(tuple(history))
+        self.choices.append((model, effort))
         if on_event is not None:
             on_event("sql", "SELECT COUNT(*) AS n FROM conditions")
             on_event("sql_result", "1 rows in 3 ms")
@@ -77,7 +80,7 @@ class StubAgent:
             on_draft(Draft(headline="Eight patients have diabetes.", findings=("8 patients match",)))
         if self.fail_with is not None:
             raise self.fail_with
-        return _result(question, history)
+        return _result(question, history, model or self.settings.model, effort or self.settings.effort)
 
 
 @pytest.fixture
@@ -333,7 +336,7 @@ def test_the_stream_refuses_an_unknown_conversation_before_it_starts(settings, d
 def test_a_run_whose_reader_never_arrives_still_finishes_and_frees_the_conversation(settings, db):
     import asyncio
 
-    from sql_agent.service import _claim, _start
+    from sql_agent.service import _Choice, _claim, _start
 
     store = ConversationStore()
     limits = SpendingLimits.from_settings(settings)
@@ -342,7 +345,7 @@ def test_a_run_whose_reader_never_arrives_still_finishes_and_frees_the_conversat
     async def ask_and_walk_away():
         background = set()
         claim = _claim(store, limits, None)
-        _start(agent, store, limits, claim, "How many have diabetes?", background)
+        _start(agent, store, limits, claim, "How many have diabetes?", background, _Choice("claude-opus-5", "high"))
         await asyncio.gather(*background)
         return claim.conversation_id
 
@@ -666,6 +669,65 @@ def test_conversations_can_be_searched(settings, db):
     assert found.status_code == 200 and [item["id"] for item in found.json()] == [diabetes]
     assert len(client.get("/api/conversations", params={"q": "  "}).json()) == 2
     assert client.get("/api/conversations", params={"q": "x" * 201}).status_code == 422
+
+
+def test_the_models_on_offer_are_listed_with_the_default(settings, db):
+    client, _ = _client(settings, db)
+    body = client.get("/api/models").json()
+    assert body["default_model"] == "claude-opus-5" and body["default_effort"] == "high"
+    ids = [model["id"] for model in body["models"]]
+    assert ids[0] == "claude-opus-5"
+    assert "claude-haiku-5-5" in ids and "claude-sonnet-5-5" in ids
+    assert "claude-fable-5-1" not in ids, "admins only, and nobody is an admin before accounts"
+    haiku = next(model for model in body["models"] if model["id"] == "claude-haiku-5-5")
+    assert haiku["efforts"] == ["low", "medium", "high", "xhigh", "max"]
+    assert haiku["input_price"] == 0.10 and haiku["evaluated"] is None
+
+
+def test_a_question_runs_on_the_model_and_effort_chosen_and_records_them(settings, db):
+    client, agent = _client(settings, db)
+    answer = client.post(
+        "/api/ask", json={"question": "How many?", "model": "claude-haiku-5-5", "effort": "low"}
+    ).json()
+    assert agent.choices[-1] == ("claude-haiku-5-5", "low")
+    assert (answer["model"], answer["effort"]) == ("claude-haiku-5-5", "low")
+
+    summary = client.get("/api/conversations").json()[0]
+    assert (summary["last_model"], summary["last_effort"]) == ("claude-haiku-5-5", "low")
+    stored = client.get(f"/api/conversations/{answer['conversation_id']}").json()
+    assert stored["history"][0]["answer"]["effort"] == "low"
+
+    # A follow-up may switch model; the conversation then remembers the new one.
+    client.post("/api/ask", json={"question": "And now?", "conversation_id": answer["conversation_id"]})
+    assert agent.choices[-1] == ("claude-opus-5", "high")
+    summary = client.get("/api/conversations").json()[0]
+    assert (summary["last_model"], summary["last_effort"]) == ("claude-opus-5", "high")
+
+
+def test_the_default_model_keeps_the_configured_effort_and_others_their_own(settings, db):
+    settings = dataclasses.replace(settings, effort="medium")
+    client, agent = _client(settings, db)
+    client.post("/api/ask", json={"question": "q"})
+    client.post("/api/ask", json={"question": "q", "model": "claude-sonnet-5-5"})
+    assert agent.choices == [("claude-opus-5", "medium"), ("claude-sonnet-5-5", "high")]
+
+
+@pytest.mark.parametrize(
+    "choice",
+    [
+        {"model": "claude-fable-5-1"},
+        {"model": "claude-haiku-4-5"},
+        {"model": "gpt-5"},
+        {"model": "claude-opus-5", "effort": "extreme"},
+    ],
+)
+def test_a_model_or_effort_not_on_offer_is_refused_before_anything_runs(settings, db, choice):
+    client, agent = _client(settings, db)
+    response = client.post("/api/ask", json={"question": "q", **choice})
+    assert response.status_code == 422
+    stream = client.post("/api/ask/stream", json={"question": "q", **choice})
+    assert stream.status_code == 422
+    assert agent.questions == [] and client.get("/api/conversations").json() == []
 
 
 def test_a_conversation_still_answering_cannot_be_deleted(settings, db):

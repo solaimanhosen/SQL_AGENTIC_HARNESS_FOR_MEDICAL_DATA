@@ -272,3 +272,13 @@ def test_search_text_is_literal_so_wildcards_and_quotes_match_only_themselves():
     assert len(store.search("_")) == 1
     assert store.search("' OR 1=1 --") == []
     assert store.search("\\") == []
+
+
+def test_the_latest_answer_s_model_and_effort_are_remembered():
+    store = ConversationStore()
+    conversation_id, _, _ = store.begin(None)
+    store.finish(conversation_id, _turn(1), model="claude-haiku-5-5", effort="low")
+    assert (store.list()[0].last_model, store.list()[0].last_effort) == ("claude-haiku-5-5", "low")
+    store.begin(conversation_id)
+    store.finish(conversation_id, None)  # a failed run changes nothing
+    assert store.list()[0].last_model == "claude-haiku-5-5"

@@ -142,12 +142,32 @@ class _FakeGraph:
 @pytest.fixture
 def offline_agent(sample_db_path, monkeypatch):
     graph = _FakeGraph()
-    monkeypatch.setattr(agent_module, "create_agent", lambda *args, **kwargs: graph)
-    monkeypatch.setattr(agent_module, "build_chat_model", lambda settings: None)
+    created, built = [], []
+    monkeypatch.setattr(agent_module, "create_agent", lambda *args, **kwargs: created.append(kwargs) or graph)
+    monkeypatch.setattr(agent_module, "build_chat_model", lambda settings, **choice: built.append(choice))
     settings = dataclasses.replace(load_settings({}), db_path=sample_db_path)
     agent = SqlAgent(settings, db=ReadOnlyDatabase(sample_db_path, max_rows=10, timeout_seconds=5))
     agent.graph = graph
+    agent.created, agent.built = created, built
     return agent
+
+
+def test_a_question_runs_on_the_default_model_unless_another_is_chosen(offline_agent):
+    result = offline_agent.answer("How many?")
+    assert offline_agent.built[-1] == {"model": "claude-opus-5", "effort": "high"}
+    assert (result.model, result.effort) == ("claude-opus-5", "high")
+
+    result = offline_agent.answer("How many?", model="claude-haiku-5-5", effort="low")
+    assert offline_agent.built[-1] == {"model": "claude-haiku-5-5", "effort": "low"}
+    assert (result.model, result.effort) == ("claude-haiku-5-5", "low")
+
+
+def test_the_answer_always_uses_native_structured_output(offline_agent):
+    from langchain.agents.structured_output import ProviderStrategy
+
+    offline_agent.answer("How many?", model="claude-sonnet-5-5")
+    strategy = offline_agent.created[-1]["response_format"]
+    assert isinstance(strategy, ProviderStrategy) and strategy.schema is StructuredAnswer
 
 
 def test_a_result_becomes_a_turn_without_its_query_citations():
