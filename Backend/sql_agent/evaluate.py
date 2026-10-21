@@ -228,6 +228,7 @@ def _issue_text(result: AgentResult) -> str:
         parts.append(f"{len(issues.unsupported_findings)} findings cite no query")
     if issues.window_not_in_sql:
         parts.append(issues.window_not_in_sql)
+    parts += issues.chart_problems
     return "; ".join(parts)
 
 

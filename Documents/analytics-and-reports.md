@@ -73,8 +73,8 @@ Work is on the branch `sql_agent/analytics/dev`, cut from `main` at `dc67346`.
 |---|---|---|---|
 | 1 | Branch, this document, decision record 0004, SciPy | Done | `a9d9d10` |
 | 2 | Backend: the analytics functions | Done | `bdf7343` |
-| 3 | Backend: analytics tools, the analysis cap, records and steps | Done | the commit after `bdf7343` |
-| 4 | Backend: chart requests, checked against the run | | |
+| 3 | Backend: analytics tools, the analysis cap, records and steps | Done | `75d7b79` |
+| 4 | Backend: chart requests, checked against the run | Done | the commit after `75d7b79` |
 | 5 | Interface: charts and analysis records | | |
 | 6 | Evaluation cases, security catalogue, evaluation re-run | | |
 | 7 | Backend: HTML report, endpoint and `--report` | | |

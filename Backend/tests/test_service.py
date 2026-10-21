@@ -8,7 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sql_agent.agent import AgentError, AgentResult
-from sql_agent.answer import AnswerIssues, Draft, Finding, StructuredAnswer, TimeWindow
+from sql_agent.answer import AnswerIssues, ChartRequest, Draft, Finding, StructuredAnswer, TimeWindow
+from sql_agent.charts import resolve_charts
 from sql_agent.config import load_settings
 from sql_agent.conversations import ConversationStore
 from sql_agent.limits import SpendingLimits
@@ -577,6 +578,29 @@ def test_an_analysis_is_sent_with_its_label_settings_and_summary(settings, db):
     assert body["queries"][0]["rows"] == [["2026-07", 36, "yes"]]
 
 
+def test_charts_are_sent_with_values_from_the_run(settings, db):
+    structured = StructuredAnswer(
+        headline="h",
+        charts=[ChartRequest(query_number=1, kind="bar", x="n", y=["n"], title="Count")],
+    )
+    result = _result("q")
+    charts, problems = resolve_charts(structured.charts, result.queries)
+    result = dataclasses.replace(result, structured=structured, charts=charts)
+    body = answer_payload(result, load_semantic_layer(), conversation_id="c" * 32, turn=1).model_dump(mode="json")
+    assert problems == ()
+    assert body["charts"] == [
+        {
+            "kind": "bar",
+            "title": "Count",
+            "query_number": 1,
+            "x_label": "n",
+            "y_label": "n",
+            "x": ["8"],
+            "series": [{"name": "n", "values": [8]}],
+        }
+    ]
+
+
 def test_an_answer_stored_before_analytics_existed_still_opens(settings, db, tmp_path):
     settings = dataclasses.replace(settings, conversations_path=tmp_path / "conversations.db")
     client, _ = _client(settings, db)
@@ -586,13 +610,16 @@ def test_an_answer_stored_before_analytics_existed_still_opens(settings, db, tmp
     old = json.loads(answer_json)
     for query in old["queries"]:
         del query["analysis"]
+    del old["charts"], old["issues"]["chart_problems"]
     store._db.execute("UPDATE turns SET answer_json = ?", (json.dumps(old),))
     store._db.commit()
 
     reopened, _ = _client(settings, db)
     response = reopened.get(f"/api/conversations/{conversation_id}")
     assert response.status_code == 200
-    assert response.json()["history"][0]["answer"]["queries"][0]["analysis"] is None
+    answer = response.json()["history"][0]["answer"]
+    assert answer["queries"][0]["analysis"] is None
+    assert answer["charts"] == [] and answer["issues"]["chart_problems"] == []
 
 
 def test_a_conversation_can_be_renamed_and_deleted(settings, db):

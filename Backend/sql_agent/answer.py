@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 from langchain_core.utils.json import parse_partial_json
 from pydantic import BaseModel, Field
 
+from .charts import MAX_CHARTS, resolve_charts
 from .semantic import SemanticLayer, window_bounds
 from .tools import QueryRecord
 
@@ -58,6 +60,22 @@ class TimeWindow(BaseModel):
     )
 
 
+class ChartRequest(BaseModel):
+    """A chart of one query's result. The values are read from that result, never given here."""
+
+    query_number: int = Field(description="The query whose rows are plotted, as labelled in the results.")
+    kind: Literal["bar", "line"] = Field(
+        description="bar to compare categories or groups, line for a value over time."
+    )
+    x: str = Field(description="The column holding the categories or periods, in the order to plot them.")
+    y: list[str] = Field(description="The numeric columns to plot, each drawn as one series.")
+    series: str | None = Field(
+        default=None,
+        description="Optional column whose values split a single y column into series, such as one line per group.",
+    )
+    title: str = Field(description="A short title saying what is plotted.")
+
+
 class StructuredAnswer(BaseModel):
     """An answer broken into parts so a reader can check every number."""
 
@@ -77,6 +95,13 @@ class StructuredAnswer(BaseModel):
     )
     caveats: list[str] = Field(
         default_factory=list, description="Only what changes how the answer should be read, such as a small cohort."
+    )
+    charts: list[ChartRequest] = Field(
+        default_factory=list,
+        description=(
+            f"At most {MAX_CHARTS} charts, only when a picture helps, such as a trend over time or several "
+            "groups side by side. Leave it empty when the answer is one or two numbers."
+        ),
     )
 
 
@@ -121,6 +146,8 @@ class AnswerIssues:
     missing_query_numbers: tuple[int, ...] = ()
     unsupported_findings: tuple[str, ...] = ()
     window_not_in_sql: str | None = None
+    chart_problems: tuple[str, ...] = ()
+    """Charts that could not be drawn from the run, each with its reason."""
 
     @property
     def any(self) -> bool:
@@ -129,6 +156,7 @@ class AnswerIssues:
             or self.missing_query_numbers
             or self.unsupported_findings
             or self.window_not_in_sql
+            or self.chart_problems
         )
 
 
@@ -153,8 +181,10 @@ def check_answer(
         markers = (f"-{months} months", start.isoformat(), end.isoformat())
         if not any(marker in record.sql for record in queries if record.ok for marker in markers):
             window_problem = f"last {months} months is claimed but no query filters on those dates"
+    _, chart_problems = resolve_charts(answer.charts, queries)
     return AnswerIssues(
         window_not_in_sql=window_problem,
+        chart_problems=chart_problems,
         unknown_definitions=tuple(name for name in answer.definitions_used if name.lower() not in layer.definitions),
         missing_query_numbers=tuple(sorted(referenced - available)),
         # A finding that states a figure must show where the figure came from. A
@@ -183,6 +213,11 @@ def render_answer(
                 else " [no query cited]"
             )
             lines.append(f"  - {finding.statement.strip()}{reference}")
+
+    charts, _ = resolve_charts(answer.charts, queries)
+    if charts:
+        lines += ["", "Charts"]
+        lines += [f"  - {chart.title}: {chart.kind} chart [query {chart.query_number}]" for chart in charts]
 
     lines += ["", f"Time window: {describe_window(answer.time_window, as_of)}", f"As-of date: {as_of}"]
 

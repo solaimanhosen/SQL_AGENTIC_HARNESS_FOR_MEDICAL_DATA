@@ -45,6 +45,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .agent import AgentError, AgentResult, SqlAgent, Turn, describe_failure
 from .answer import Draft, describe_window
+from .charts import Chart
 from .conversations import (
     MAX_TITLE_CHARS,
     ConversationBusy,
@@ -131,6 +132,25 @@ class IssuesOut(BaseModel):
     missing_query_numbers: list[int]
     unsupported_findings: list[str]
     window_not_in_sql: str | None
+    chart_problems: list[str] = []
+    """Charts asked for that could not be drawn from the run, each with its reason."""
+
+
+class SeriesOut(BaseModel):
+    name: str
+    values: list[float | None]
+    """One value per category, in the order of the chart's x. None is a gap."""
+
+
+class ChartOut(BaseModel):
+    kind: Literal["bar", "line"]
+    title: str
+    """Written by the model. Every value is read from the cited query's rows."""
+    query_number: int
+    x_label: str
+    y_label: str
+    x: list[str]
+    series: list[SeriesOut]
 
 
 class AnswerOut(BaseModel):
@@ -150,6 +170,8 @@ class AnswerOut(BaseModel):
     caveats: list[str]
     queries: list[QueryOut]
     issues: IssuesOut
+    charts: list[ChartOut] = []
+    """Drawn only from the run. Answers stored before charts existed have none."""
     as_of: date
     model: str
     elapsed_s: float
@@ -682,12 +704,26 @@ def answer_payload(result: AgentResult, layer: SemanticLayer, *, conversation_id
             missing_query_numbers=list(issues.missing_query_numbers),
             unsupported_findings=list(issues.unsupported_findings),
             window_not_in_sql=issues.window_not_in_sql,
+            chart_problems=list(issues.chart_problems),
         ),
+        charts=[chart_payload(chart) for chart in result.charts],
         as_of=result.as_of,
         model=result.model,
         elapsed_s=round(result.elapsed_s, 2),
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
+    )
+
+
+def chart_payload(chart: Chart) -> ChartOut:
+    return ChartOut(
+        kind=chart.kind,
+        title=chart.title,
+        query_number=chart.query_number,
+        x_label=chart.x_label,
+        y_label=chart.y_label,
+        x=list(chart.x),
+        series=[SeriesOut(name=series.name, values=list(series.values)) for series in chart.series],
     )
 
 

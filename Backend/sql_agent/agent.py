@@ -18,6 +18,7 @@ from langchain.agents import create_agent
 from langgraph.errors import GraphRecursionError
 
 from .answer import AnswerIssues, Draft, StructuredAnswer, check_answer, draft_from_partial, render_answer
+from .charts import Chart, resolve_charts
 from .config import Settings, load_settings
 from .db import ReadOnlyDatabase
 from .llm import build_chat_model
@@ -89,6 +90,8 @@ class AgentResult:
     output_tokens: int
     history: tuple[Turn, ...] = ()
     """The earlier turns the agent was shown, oldest first."""
+    charts: tuple[Chart, ...] = ()
+    """The charts asked for that could be drawn, with values read from the run."""
 
     @property
     def successful_queries(self) -> tuple[QueryRecord, ...]:
@@ -176,10 +179,11 @@ class SqlAgent:
         if isinstance(structured, StructuredAnswer):
             issues = check_answer(structured, queries, self.layer, as_of=self.as_of)
             answer_text = render_answer(structured, queries, self.layer, as_of=self.as_of)
+            charts, _ = resolve_charts(structured.charts, queries)
         else:
             # The model answered in prose instead of filling in the schema. Rare, but the
             # answer is still worth returning rather than failing the whole run.
-            structured, issues = None, AnswerIssues()
+            structured, issues, charts = None, AnswerIssues(), ()
             answer_text = _final_text(messages)
         if not answer_text:
             raise AgentError("The model finished without writing an answer.")
@@ -197,6 +201,7 @@ class SqlAgent:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             history=history,
+            charts=charts,
         )
 
 

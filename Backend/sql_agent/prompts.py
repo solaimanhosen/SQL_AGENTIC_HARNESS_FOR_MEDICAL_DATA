@@ -72,6 +72,10 @@ You return a structured answer, not free prose. Fill in every part:
   by date, leave months empty and write "all dates in the data" in the description.
 - assumptions: choices you made that the user did not specify.
 - caveats: only what changes how the answer should be read, such as a small cohort.
+- charts: when a picture helps, such as a trend over time or groups side by side, name the
+  query to plot and its columns. The values are read from that query's rows, so plot a
+  result whose rows are exactly the points to draw, such as a trend's table or a grouped
+  SELECT, in the order to draw them. Leave charts empty for an answer of one or two numbers.
 
 Write plain sentences. Do not restate the definition text, the SQL or the as-of date: they
 are shown to the reader automatically, with each definition's confirmation status.
