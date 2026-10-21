@@ -1,5 +1,6 @@
-import { Component, computed, inject, input, viewChild } from '@angular/core';
+import { Component, computed, inject, input, signal, viewChild } from '@angular/core';
 
+import { AgentApi, ApiError } from '../api/agent-api';
 import { Answer, DefinitionStatus, Step } from '../api/types';
 import { Exporter, answerJson, fileStem } from './export';
 import { ChartView } from './chart-view';
@@ -32,6 +33,11 @@ export class AnswerView {
 
   private readonly queryList = viewChild(QueryList);
   private readonly exporter = inject(Exporter);
+  private readonly api = inject(AgentApi);
+
+  /** True while the report is being made, and the reason when it could not be. */
+  protected readonly reporting = signal(false);
+  protected readonly reportError = signal<string | null>(null);
 
   protected readonly stem = computed(() => fileStem(this.answer()));
 
@@ -73,6 +79,25 @@ export class AnswerView {
   /** The whole answer as the service sent it, rows included. */
   protected downloadJson(): void {
     this.exporter.save(`${this.stem()}-answer.json`, answerJson(this.answer()), 'application/json');
+  }
+
+  /**
+   * The answer as one HTML file with its charts, tables and SQL, which opens with no network.
+   * The service makes it from the stored answer, so it matches what was shown here.
+   */
+  protected async downloadReport(): Promise<void> {
+    const answer = this.answer();
+    this.reporting.set(true);
+    this.reportError.set(null);
+    try {
+      const html = await this.api.report(answer.conversation_id, answer.turn);
+      this.exporter.save(`${this.stem()}-report.html`, html, 'text/html;charset=utf-8');
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : 'The report could not be made.';
+      this.reportError.set(message);
+    } finally {
+      this.reporting.set(false);
+    }
   }
 
   protected statusLabel(status: DefinitionStatus): string {

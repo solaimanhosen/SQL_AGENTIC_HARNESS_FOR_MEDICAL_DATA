@@ -77,8 +77,8 @@ Work is on the branch `sql_agent/analytics/dev`, cut from `main` at `dc67346`.
 | 4 | Backend: chart requests, checked against the run | Done | `20491db` |
 | 5 | Interface: charts and analysis records | Done | `22b77c1` |
 | 6 | Evaluation cases, security catalogue, evaluation re-run | Done | `1b6d7e2` |
-| 7 | Backend: HTML report, endpoint and `--report` | Done | the commit after `1b6d7e2` |
-| 8 | Interface: report download | | |
+| 7 | Backend: HTML report, endpoint and `--report` | Done | `51a3862` |
+| 8 | Interface: report download | Done | the commit after `51a3862` |
 | 9 | Documentation, results and browser checks | | |
 
 ## Results

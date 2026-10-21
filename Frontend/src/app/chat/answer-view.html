@@ -139,6 +139,14 @@
 
   <div class="foot">
     <p class="meta">{{ meta() }}</p>
-    <button type="button" class="tool" (click)="downloadJson()">Download answer (JSON)</button>
+    <div class="downloads">
+      <button type="button" class="tool" [disabled]="reporting()" (click)="downloadReport()">
+        {{ reporting() ? 'Making the report…' : 'Download report (HTML)' }}
+      </button>
+      <button type="button" class="tool" (click)="downloadJson()">Download answer (JSON)</button>
+    </div>
   </div>
+  @if (reportError(); as message) {
+    <p class="report-error" role="alert">{{ message }}</p>
+  }
 </div>

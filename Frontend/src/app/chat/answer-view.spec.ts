@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 
+import { AgentApi, ApiError } from '../api/agent-api';
 import { Answer, QueryRecord, Step } from '../api/types';
 import { answerFixture } from '../testing/fixtures';
 import { AnswerView } from './answer-view';
@@ -21,12 +22,22 @@ function fakeExporter(copies = true) {
   return { save: vi.fn(), saveCsv: vi.fn(), copy: vi.fn(async () => copies) };
 }
 
+function fakeApi(report: () => Promise<string> = async () => '<!doctype html><p>report</p>') {
+  return { report: vi.fn(report) };
+}
+
 async function render(
   overrides: Partial<Answer> = {},
   steps: Step[] = [],
   exporter = fakeExporter(),
+  api = fakeApi(),
 ) {
-  TestBed.configureTestingModule({ providers: [{ provide: Exporter, useValue: exporter }] });
+  TestBed.configureTestingModule({
+    providers: [
+      { provide: Exporter, useValue: exporter },
+      { provide: AgentApi, useValue: api },
+    ],
+  });
   const fixture = TestBed.createComponent(AnswerView);
   fixture.componentRef.setInput('answer', answerFixture(overrides));
   fixture.componentRef.setInput('steps', steps);
@@ -36,6 +47,16 @@ async function render(
 
 function text(element: Element | null): string {
   return (element?.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function button(element: HTMLElement, label: string): HTMLButtonElement {
+  const found = [...element.querySelectorAll<HTMLButtonElement>('button')].find(
+    (each) => text(each) === label,
+  );
+  if (!found) {
+    throw new Error(`No button labelled ${label}`);
+  }
+  return found;
 }
 
 describe('AnswerView', () => {
@@ -287,7 +308,7 @@ describe('AnswerView', () => {
   it('downloads the whole answer as JSON', async () => {
     const exporter = fakeExporter();
     const { element } = await render({}, [], exporter);
-    (element.querySelector('.foot .tool') as HTMLButtonElement).click();
+    button(element, 'Download answer (JSON)').click();
     const [name, body, type] = exporter.save.mock.calls[0];
     expect(name).toBe('cccccccc-turn1-answer.json');
     expect(type).toBe('application/json');
@@ -391,5 +412,35 @@ describe('AnswerView', () => {
       analysed.analysis!.summary,
     );
     expect(panel.querySelectorAll('app-result-table tbody tr').length).toBe(2);
+  });
+
+  it('downloads the report the service makes for this answer', async () => {
+    const exporter = fakeExporter();
+    const api = fakeApi();
+    const { fixture, element } = await render({ turn: 3 }, [], exporter, api);
+    button(element, 'Download report (HTML)').click();
+    await fixture.whenStable();
+    expect(api.report).toHaveBeenCalledWith('c'.repeat(32), 3);
+    expect(exporter.save).toHaveBeenCalledWith(
+      'cccccccc-turn3-report.html',
+      '<!doctype html><p>report</p>',
+      'text/html;charset=utf-8',
+    );
+    expect(element.querySelector('.report-error')).toBeNull();
+  });
+
+  it('says why a report could not be made, and lets the button be used again', async () => {
+    const api = fakeApi(async () => {
+      throw new ApiError(404, 'unknown_turn', 'This conversation has no answered question 1.');
+    });
+    const exporter = fakeExporter();
+    const { fixture, element } = await render({}, [], exporter, api);
+    button(element, 'Download report (HTML)').click();
+    await fixture.whenStable();
+    expect(text(element.querySelector('.report-error'))).toBe(
+      'This conversation has no answered question 1.',
+    );
+    expect(exporter.save).not.toHaveBeenCalled();
+    expect(button(element, 'Download report (HTML)').disabled).toBe(false);
   });
 });
