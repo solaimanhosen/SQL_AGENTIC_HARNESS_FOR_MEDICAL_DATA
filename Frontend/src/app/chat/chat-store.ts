@@ -1,7 +1,15 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 
 import { AgentApi, ApiError } from '../api/agent-api';
-import { Answer, ConversationChanges, ConversationSummary, Draft, Step } from '../api/types';
+import {
+  Answer,
+  ConversationChanges,
+  ConversationSummary,
+  Draft,
+  ModelCatalog,
+  ModelChoice,
+  Step,
+} from '../api/types';
 
 export const MAX_QUESTION_CHARS = 2000;
 
@@ -46,6 +54,32 @@ export class ChatStore {
   );
   /** True after the service refused a question for want of the access token. */
   readonly needsToken = signal(false);
+  /** The models on offer. Null until the service has said, when its default applies. */
+  readonly catalog = signal<ModelCatalog | null>(null);
+  /** The model and effort the next question runs on. It may change between questions. */
+  readonly choice = signal<ModelChoice | null>(null);
+
+  /** Fetch the models on offer, and start with the default if nothing is chosen yet. */
+  async loadModels(): Promise<void> {
+    try {
+      const catalog = await this.api.models();
+      this.catalog.set(catalog);
+      if (!this.choice()) {
+        this.choice.set({ model: catalog.default_model, effort: catalog.default_effort });
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.kind === 'unauthorized') {
+        this.needsToken.set(true);
+      }
+    }
+  }
+
+  /** Change the model or effort. Only a combination the service offers is accepted. */
+  choose(choice: ModelChoice): void {
+    if (offers(this.catalog(), choice)) {
+      this.choice.set(choice);
+    }
+  }
 
   async ask(question: string): Promise<void> {
     question = question.trim();
@@ -104,6 +138,10 @@ export class ChatStore {
         })),
       );
       this.conversationId.set(id);
+      // Continue on the model and effort its latest answer used, if they are still offered.
+      if (stored.last_model && stored.last_effort) {
+        this.choose({ model: stored.last_model, effort: stored.last_effort });
+      }
       return true;
     } catch (error) {
       if (error instanceof ApiError && error.kind === 'unauthorized') {
@@ -193,7 +231,8 @@ export class ChatStore {
   private async run(id: number, question: string): Promise<void> {
     let turn: number | null = null;
     try {
-      for await (const event of this.api.askStream(question, this.conversationId())) {
+      const stream = this.api.askStream(question, this.conversationId(), undefined, this.choice());
+      for await (const event of stream) {
         if (event.type === 'conversation') {
           this.conversationId.set(event.conversationId);
           turn = event.turn;
@@ -261,4 +300,10 @@ export class ChatStore {
       ),
     );
   }
+}
+
+/** Whether the catalog offers this model at this effort. */
+function offers(catalog: ModelCatalog | null, choice: ModelChoice): boolean {
+  const model = catalog?.models.find((item) => item.id === choice.model);
+  return !!model && model.efforts.includes(choice.effort);
 }

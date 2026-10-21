@@ -59,6 +59,7 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/chat/export.ts` | CSV and JSON building, file names, and the download and clipboard helpers. |
 | `src/app/chat/step-log.ts` | Every step the agent took, with the SQL of each query, live and afterwards. |
 | `src/app/chat/composer.ts` | The question box. Enter sends, Shift+Enter adds a line. |
+| `src/app/chat/model-picker.ts` | Two menus in the question box: the model, with its price and evaluation status, and the effort. The choice applies to the next question; a reopened conversation continues on its latest answer's model. |
 | `src/app/chat/token-prompt.ts` | Asks for the access token when the service requires one. |
 | `src/app/app.ts`, `app.routes.ts`, `app.config.ts` | The root, which is only a router outlet, and the routes: `/` is a new chat and `/c/<id>` a stored one, matched by one route so the page is kept when a new chat gets its id. Old `/#<id>` links are moved to the new address. |
 | `src/app/chat/chat-page.*` | The chat screen: sidebar with its draggable edge, the header with service status and the theme menu, example questions, the thread and the question box. Keeps the address and the conversation on screen in step. |

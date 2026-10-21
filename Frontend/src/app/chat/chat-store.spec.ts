@@ -2,7 +2,12 @@ import { TestBed } from '@angular/core/testing';
 
 import { AgentApi, ApiError } from '../api/agent-api';
 import { ConversationDetail, ConversationSummary, StreamEvent } from '../api/types';
-import { answerFixture, conversationFixture, summaryFixture } from '../testing/fixtures';
+import {
+  answerFixture,
+  catalogFixture,
+  conversationFixture,
+  summaryFixture,
+} from '../testing/fixtures';
 import { ChatStore, MAX_QUESTION_CHARS } from './chat-store';
 
 type Script = (question: string, conversationId: string | null) => AsyncGenerator<StreamEvent>;
@@ -27,6 +32,7 @@ function setup(script: Script) {
           : {}),
       }),
     ),
+    models: vi.fn(async () => catalogFixture()),
     deleteConversation: vi.fn(async (_id: string) => undefined),
   };
   TestBed.configureTestingModule({ providers: [{ provide: AgentApi, useValue: api }] });
@@ -208,6 +214,38 @@ describe('ChatStore', () => {
       title: 'Diabetes counts',
     });
     expect(store.conversations()[0].title).toBe('Diabetes counts');
+  });
+
+  it('starts on the default model, and accepts only choices the service offers', async () => {
+    const { store } = setup(answered);
+    await store.loadModels();
+    expect(store.choice()).toEqual({ model: 'claude-opus-5', effort: 'high' });
+
+    store.choose({ model: 'claude-haiku-5-5', effort: 'low' });
+    expect(store.choice()).toEqual({ model: 'claude-haiku-5-5', effort: 'low' });
+    store.choose({ model: 'claude-haiku-5-5', effort: 'max' }); // Haiku here offers up to high
+    store.choose({ model: 'claude-fable-5-1', effort: 'high' }); // not offered at all
+    expect(store.choice()).toEqual({ model: 'claude-haiku-5-5', effort: 'low' });
+  });
+
+  it('sends the choice with the question', async () => {
+    const { store, api } = setup(answered);
+    const asked = vi.spyOn(api, 'askStream');
+    await store.loadModels();
+    store.choose({ model: 'claude-haiku-5-5', effort: 'medium' });
+    await store.ask('How many?');
+    expect(asked).toHaveBeenCalledWith('How many?', null, undefined, {
+      model: 'claude-haiku-5-5',
+      effort: 'medium',
+    });
+  });
+
+  it('keeps the current choice when the catalog cannot be read, so the service default applies', async () => {
+    const { store, api } = setup(answered);
+    api.models.mockRejectedValue(new ApiError(0, 'unreachable', 'Down.'));
+    await store.loadModels();
+    expect(store.catalog()).toBeNull();
+    expect(store.choice()).toBeNull();
   });
 
   it('pins and unpins a conversation in the list and in search results', async () => {

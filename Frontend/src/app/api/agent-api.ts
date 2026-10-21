@@ -8,6 +8,8 @@ import {
   ConversationSummary,
   Draft,
   Health,
+  ModelCatalog,
+  ModelChoice,
   StreamEvent,
 } from './types';
 
@@ -60,6 +62,12 @@ export class AgentApi {
     return (await response.json()) as ConversationSummary[];
   }
 
+  /** The models a question may run on, and the default. */
+  async models(): Promise<ModelCatalog> {
+    const response = await this.request('/models', { method: 'GET' });
+    return (await response.json()) as ModelCatalog;
+  }
+
   /** One stored conversation with every answer in it. */
   async conversation(id: string): Promise<ConversationDetail> {
     const response = await this.request(`/conversations/${id}`, { method: 'GET' });
@@ -96,10 +104,13 @@ export class AgentApi {
     question: string,
     conversationId: string | null,
     abort?: AbortSignal,
+    choice?: ModelChoice | null,
   ): AsyncGenerator<StreamEvent> {
-    const body = JSON.stringify(
-      conversationId ? { question, conversation_id: conversationId } : { question },
-    );
+    const body = JSON.stringify({
+      question,
+      ...(conversationId ? { conversation_id: conversationId } : {}),
+      ...(choice ? { model: choice.model, effort: choice.effort } : {}),
+    });
     const response = await this.request('/ask/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },

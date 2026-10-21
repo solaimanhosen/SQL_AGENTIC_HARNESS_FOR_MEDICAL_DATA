@@ -5,7 +5,12 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { AgentApi, ApiError, UNREACHABLE } from '../api/agent-api';
 import { ConversationSummary, Health, StreamEvent } from '../api/types';
 import { provideAppRouter } from '../app.config';
-import { answerFixture, conversationFixture, summaryFixture } from '../testing/fixtures';
+import {
+  answerFixture,
+  catalogFixture,
+  conversationFixture,
+  summaryFixture,
+} from '../testing/fixtures';
 import { ChatPage, EXAMPLE_QUESTIONS } from './chat-page';
 
 const HEALTH: Health = {
@@ -38,6 +43,7 @@ function fakeApi(
       }),
     ),
     deleteConversation: vi.fn(async (_id: string) => undefined),
+    models: vi.fn(async () => catalogFixture()),
   };
 }
 
@@ -68,7 +74,7 @@ describe('ChatPage', () => {
   it('shows the service status and the example questions', async () => {
     const { element } = await render(fakeApi(answers));
     expect(element.querySelector('.status')?.textContent).toContain(
-      'claude-opus-5 · synthetic data as of 2026-08-16',
+      'Connected · synthetic data as of 2026-08-16',
     );
     const examples = [...element.querySelectorAll('.example')].map((button) =>
       button.textContent?.trim(),
@@ -95,7 +101,10 @@ describe('ChatPage', () => {
     (element.querySelector('.example') as HTMLButtonElement).click();
     await fixture.whenStable();
 
-    expect(api.askStream).toHaveBeenCalledWith(EXAMPLE_QUESTIONS[0], null);
+    expect(api.askStream).toHaveBeenCalledWith(EXAMPLE_QUESTIONS[0], null, undefined, {
+      model: 'claude-opus-5',
+      effort: 'high',
+    });
     expect(element.querySelector('.question')?.textContent).toBe(EXAMPLE_QUESTIONS[0]);
     expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
     expect(element.querySelector('.findings li')?.textContent).toContain('Query 1');
@@ -191,8 +200,91 @@ describe('ChatPage', () => {
     box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
     await fixture.whenStable();
 
-    expect(api.askStream).toHaveBeenCalledWith('How many patients are there?', null);
+    expect(api.askStream).toHaveBeenCalledWith('How many patients are there?', null, undefined, {
+      model: 'claude-opus-5',
+      effort: 'high',
+    });
     expect(box.value).toBe('');
+  });
+
+  describe('choosing the model', () => {
+    /** Open one of the picker's menus and pick the item whose name is this. */
+    async function pick(fixture: ComponentFixture<unknown>, menu: number, name: string) {
+      const pills = fixture.nativeElement.querySelectorAll('app-model-picker .pill');
+      (pills[menu] as HTMLButtonElement).click();
+      await fixture.whenStable();
+      const items = [...document.querySelectorAll<HTMLButtonElement>('.picker-menu .menu-item')];
+      items.find((item) => item.querySelector('.name')?.textContent?.trim() === name)!.click();
+      await fixture.whenStable();
+    }
+    const pills = (element: HTMLElement) =>
+      [...element.querySelectorAll('app-model-picker .pill')].map((pill) =>
+        pill.textContent?.trim(),
+      );
+
+    it('starts on the default and lists every model with its price and evaluation', async () => {
+      const { fixture, element } = await render(fakeApi(answers));
+      expect(pills(element)).toEqual(['Opus 5', 'High effort']);
+
+      (element.querySelector('app-model-picker .pill') as HTMLButtonElement).click();
+      await fixture.whenStable();
+      const options = [...document.querySelectorAll('.picker-menu .option')];
+      expect(options.map((option) => option.querySelector('.name')?.textContent?.trim())).toEqual([
+        'Opus 5',
+        'Haiku 5.5',
+      ]);
+      expect(options[1].querySelector('.facts')?.textContent).toContain(
+        '$0.10 / $0.50 per million tokens',
+      );
+      expect(options[1].querySelector('.facts')?.textContent).toContain('Not yet evaluated');
+      expect(options[0].getAttribute('aria-checked')).toBe('true');
+    });
+
+    it('asks on the model and effort picked, keeping an effort the new model offers', async () => {
+      const api = fakeApi(answers);
+      const { fixture, element } = await render(api);
+
+      await pick(fixture, 1, 'Low');
+      await pick(fixture, 0, 'Haiku 5.5');
+      expect(pills(element)).toEqual(['Haiku 5.5', 'Low effort']);
+
+      (element.querySelector('.example') as HTMLButtonElement).click();
+      await fixture.whenStable();
+      expect(api.askStream).toHaveBeenLastCalledWith(EXAMPLE_QUESTIONS[0], null, undefined, {
+        model: 'claude-haiku-5-5',
+        effort: 'low',
+      });
+    });
+
+    it("takes the new model's default when it does not offer the effort", async () => {
+      const { fixture, element } = await render(fakeApi(answers));
+      await pick(fixture, 1, 'Max');
+      await pick(fixture, 0, 'Haiku 5.5');
+      expect(pills(element)).toEqual(['Haiku 5.5', 'Medium effort']);
+    });
+
+    it('continues a reopened conversation on the model its latest answer used', async () => {
+      const api = fakeApi(answers);
+      api.conversation.mockResolvedValue(
+        conversationFixture({ last_model: 'claude-haiku-5-5', last_effort: 'low' }),
+      );
+      const { fixture, element } = await render(api, '/c/' + 'c'.repeat(32));
+      await vi.waitFor(async () => {
+        await fixture.whenStable();
+        expect(pills(element)).toEqual(['Haiku 5.5', 'Low effort']);
+      });
+    });
+
+    it('shows the model and effort under each answer', async () => {
+      const { fixture, element } = await render(
+        fakeApi(() => answers({ model: 'claude-haiku-5-5', effort: 'low' })),
+      );
+      (element.querySelector('.example') as HTMLButtonElement).click();
+      await fixture.whenStable();
+      expect(element.querySelector('.meta')?.textContent).toContain(
+        'claude-haiku-5-5 at low effort',
+      );
+    });
   });
 
   describe('with stored conversations', () => {

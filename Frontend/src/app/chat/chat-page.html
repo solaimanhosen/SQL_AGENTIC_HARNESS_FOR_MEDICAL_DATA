@@ -75,7 +75,7 @@
           }
           @default {
             @let info = healthInfo()!;
-            <span>{{ info.model }} · synthetic data as of {{ info.as_of }}</span>
+            <span>Connected · synthetic data as of {{ info.as_of }}</span>
           }
         }
       </p>
@@ -129,6 +129,9 @@
             ? 'Ask a follow-up, or a new question'
             : 'Ask a question about the patient data'
         "
+        [catalog]="store.catalog()"
+        [choice]="store.choice()"
+        (choiceChange)="store.choose($event)"
         (ask)="ask($event)"
       />
       <p class="note">

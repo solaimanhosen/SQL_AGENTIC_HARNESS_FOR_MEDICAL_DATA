@@ -92,6 +92,8 @@ export interface Answer {
   charts?: Chart[];
   as_of: string;
   model: string;
+  /** The effort it ran at. Answers stored before effort was recorded lack it. */
+  effort?: Effort | null;
   elapsed_s: number;
   input_tokens: number;
   output_tokens: number;
@@ -123,6 +125,37 @@ export interface ConversationSummary {
   turns: number;
   /** When it was pinned, or null. Missing from services before pinning existed. */
   pinned_at?: string | null;
+  /** The model and effort of its latest answer, so a reopened conversation continues with them. */
+  last_model?: string | null;
+  last_effort?: Effort | null;
+}
+
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/** One model the agent may run on, as /api/models describes it. */
+export interface ModelInfo {
+  id: string;
+  label: string;
+  description: string;
+  /** USD per million tokens, at the base rate. */
+  input_price: number;
+  output_price: number;
+  efforts: Effort[];
+  default_effort: Effort;
+  /** The evaluation result on this model, or null if it has not been evaluated. */
+  evaluated: string | null;
+}
+
+export interface ModelCatalog {
+  default_model: string;
+  default_effort: Effort;
+  models: ModelInfo[];
+}
+
+/** What a question should run on. */
+export interface ModelChoice {
+  model: string;
+  effort: Effort;
 }
 
 /** What a PATCH may change. Fields left out stay as they are. */

@@ -26,6 +26,20 @@ Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-account
   anywhere. It looks in titles and in every question, through `GET /api/conversations?q=`.
 - Pinning: `PATCH /api/conversations/{id}` takes `{"pinned": true}` as well as a title.
   Pinned conversations are evicted last.
+- Choosing the model and effort for each question.
+  - Two menus in the question box offer Opus 5 (the default), Opus 5.5, Sonnet 5.5,
+    Sonnet 5 and Haiku 5.5, each with its price and whether it has been evaluated, and the
+    five effort levels.
+  - The choice can change between questions. A reopened conversation continues on its
+    latest answer's model, and every answer shows the model and effort it came from.
+  - Fable 5.1 is in the catalog for admins, once accounts exist.
+- `GET /api/models`, and `model` and `effort` on `/api/ask` and `/api/ask/stream`. The
+  service refuses anything not in `sql_agent/models.py` with a 422.
+- `effort` on stored answers and in the run log, and `last_model` and `last_effort` on
+  conversations, which is schema version 3.
+- `evaluate --model --effort` to score any model, with the estimated cost in the report.
+- `check_setup` compares the catalog with the live Models API, and `--all-models` makes one
+  small call to each model.
 - Schema versions for `data/conversations.db`. A v3 file upgrades in place when opened, and a
   file from a newer version is refused untouched.
 
@@ -35,10 +49,16 @@ Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-account
   line length. The header and the question box span the whole pane.
 - The question box is a single card with a send button, and the example questions are
   cards.
-- The header shows the open conversation's title and a status dot.
+- The header shows the open conversation's title and a status dot. The model moved from
+  the header to the question box, since it can now change between questions.
+- Every model runs with adaptive thinking, an explicit effort and the API's native
+  structured output, set by us rather than left to langchain-anthropic, which has no
+  profile for Sonnet 5.5 or Haiku 5.5.
 - The phone drawer moves focus inside when it opens, keeps it there, and closes with Escape,
   returning focus to the button that opened it.
 - When the service cannot be reached, the message no longer tells users to run a command.
+- The initial bundle's warning budget is 600 kB instead of 500 kB: the router, CDK menus and
+  dialogs bring it to about 505 kB, 112 kB transferred. The error limit stays at 1 MB.
 
 ## v3.0.0 — 21 October 2026
 

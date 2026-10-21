@@ -1,4 +1,4 @@
-import { Answer, ConversationDetail, ConversationSummary } from '../api/types';
+import { Answer, ConversationDetail, ConversationSummary, ModelCatalog } from '../api/types';
 
 /** A complete answer as the service returns it, with any field overridden. */
 export function answerFixture(overrides: Partial<Answer> = {}): Answer {
@@ -78,5 +78,36 @@ export function conversationFixture(
       },
     ],
     ...overrides,
+  };
+}
+
+/** The models on offer, as /api/models returns them: the default and a cheap one. */
+export function catalogFixture(): ModelCatalog {
+  const efforts = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+  return {
+    default_model: 'claude-opus-5',
+    default_effort: 'high',
+    models: [
+      {
+        id: 'claude-opus-5',
+        label: 'Opus 5',
+        description: 'The default.',
+        input_price: 5,
+        output_price: 25,
+        efforts: [...efforts],
+        default_effort: 'high',
+        evaluated: '23 of 23 at high effort',
+      },
+      {
+        id: 'claude-haiku-5-5',
+        label: 'Haiku 5.5',
+        description: 'The fastest and cheapest.',
+        input_price: 0.1,
+        output_price: 0.5,
+        efforts: ['low', 'medium', 'high'],
+        default_effort: 'medium',
+        evaluated: null,
+      },
+    ],
   };
 }

@@ -79,6 +79,25 @@ describe('AgentApi', () => {
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer secret-token');
   });
 
+  it('sends the chosen model and effort with the question', async () => {
+    const { api, fetchSpy } = setup(async () => streamResponse([sse('answer', answer)]));
+    await collect(
+      api.askStream('q', null, undefined, { model: 'claude-haiku-5-5', effort: 'low' }),
+    );
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body as string)).toEqual({
+      question: 'q',
+      model: 'claude-haiku-5-5',
+      effort: 'low',
+    });
+  });
+
+  it('reads the models on offer', async () => {
+    const catalog = { default_model: 'claude-opus-5', default_effort: 'high', models: [] };
+    const { api, fetchSpy } = setup(async () => jsonResponse(catalog, 200));
+    expect(await api.models()).toEqual(catalog);
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/models');
+  });
+
   it('sends no Authorization header without a token', async () => {
     const { api, fetchSpy } = setup(async () => streamResponse([sse('answer', answer)]));
     await collect(api.askStream('q', null));

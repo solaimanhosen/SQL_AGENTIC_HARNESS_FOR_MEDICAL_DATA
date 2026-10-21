@@ -149,6 +149,8 @@ export class ChatPage implements OnInit {
     } catch {
       this.health.set('unreachable');
     }
+    // Before the conversation is opened, so its last model can be restored.
+    await this.store.loadModels();
     await this.restore();
   }
 
@@ -306,7 +308,7 @@ export class ChatPage implements OnInit {
       void this.store.retry(failed.id);
     }
     if (!this.restored()) {
-      void this.restore();
+      void this.store.loadModels().then(() => this.restore());
     }
   }
 

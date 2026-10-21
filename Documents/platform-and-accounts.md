@@ -48,14 +48,16 @@ The model list was read from the live Models API on 21 October 2026, not from me
 lists 14 models. These six are offered, and every one accepts adaptive thinking and all five
 effort levels (`low`, `medium`, `high`, `xhigh`, `max`):
 
-| Model | ID | Note |
-|---|---|---|
-| Opus 5 | `claude-opus-5` | The default, and the model the evaluation scores were measured on |
-| Opus 5.5 | `claude-opus-5-5` | Thinking cannot be turned off. Its own default effort is `medium`, so we always send one |
-| Sonnet 5.5 | `claude-sonnet-5-5` | |
-| Sonnet 5 | `claude-sonnet-5` | |
-| Haiku 5.5 | `claude-haiku-5-5` | |
-| Fable 5.1 | `claude-fable-5-1` | The most capable, at twice Opus 5's price. Proposed for admins only |
+| Model | ID | $ per million tokens, in / out | Note |
+|---|---|---|---|
+| Opus 5 | `claude-opus-5` | 5 / 25 | The default, and the model the evaluation scores were measured on |
+| Opus 5.5 | `claude-opus-5-5` | 4 / 20 | Thinking cannot be turned off. Its own default effort is `medium`, so we always send one |
+| Sonnet 5.5 | `claude-sonnet-5-5` | 2 / 10 | |
+| Sonnet 5 | `claude-sonnet-5` | 2 / 10 | |
+| Haiku 5.5 | `claude-haiku-5-5` | 0.10 / 0.50 | For prompts up to 100,000 tokens; ours are about 17,000 |
+| Fable 5.1 | `claude-fable-5-1` | 10 / 50 | The most capable. For admins only, because of cost |
+
+Prices are from Anthropic's pricing page on the same day.
 
 The older models are left out. Opus 4.5 lacks `xhigh` and `max`, and Haiku 4.5 and Sonnet
 4.5 have no effort setting at all.
@@ -63,12 +65,15 @@ The older models are left out. Opus 4.5 lacks `xhigh` and `max`, and Haiku 4.5 a
 ## Traps found
 
 - **LangChain does not know two of the models.** langchain-anthropic 1.7.4 has no profile
-  for Sonnet 5.5 or Haiku 5.5.
-  - Without one, the agent quietly switches from native structured output to a tool-based
-    one.
-  - That breaks the streamed draft of the answer, and may force a tool choice, which newer
+  for Sonnet 5.5 or Haiku 5.5. Two things followed from that:
+  - The agent would quietly switch from native structured output to a tool-based one. That
+    breaks the streamed draft of the answer, and may force a tool choice, which newer
     models reject.
-  - Step 18 asks for native structured output explicitly.
+  - Inspecting the exact request showed a second gap: LangChain also left thinking unset
+    for those two models, while Opus 5 got adaptive thinking.
+
+  Step 18 sends both explicitly for every model, and a test checks the request for each
+  model in the catalog.
 - **A CSS class name was used twice.** The new menus use a global `.menu` class, and the
   header's sidebar button was also called `.menu`. At phone width the button stretched into
   a wide floating box. Browser checks at phone width caught it, and the button is now
@@ -174,13 +179,43 @@ height, so nothing moves.
 
 ### Model and effort (Step 18)
 
-Planned:
-- A catalog in `sql_agent/models.py`, edited by hand.
-- `GET /api/models`.
-- `model` and `effort` on each question, validated against the catalog.
-- Both recorded on the answer and in the run log.
-- `evaluate --model --effort`, so models can be compared later. The 23-question
-  evaluation is **not** run live in this phase.
+The design is ADR 0005.
+
+**The catalog.**
+- `sql_agent/models.py` is a short list kept by hand. Each entry has its price, effort
+  levels, default effort, whether only admins may pick it, and its evaluation result.
+- The default model in `.env` must be on the list, or the settings refuse to load.
+- `GET /api/models` returns the list in the picker's order.
+
+**Choosing.**
+- `model` and `effort` are optional on each question. The service checks them against the
+  catalog and refuses anything else with a 422 before anything runs.
+- The model may change between questions. The conversation remembers its latest answer's
+  choice, and a reopened conversation continues with it.
+- Picking a new model keeps the effort if that model offers it.
+- Fable 5.1 is admin only. Until accounts exist nobody is an admin, so it is not offered.
+
+**Running.**
+- Every model gets the same request: adaptive thinking with summaries, an explicit effort,
+  the refusal fallback, and the API's native structured output.
+
+**Recording.**
+- The model and effort are kept on the stored answer, in the run log and in the evaluation
+  report.
+- Every answer shows them, for example "claude-haiku-5-5 at low effort".
+
+**In the interface.**
+- Two small menus sit in the question box, one for the model and one for the effort.
+- The model menu gives each model's description, price per million tokens, and either its
+  evaluation result or "Not yet evaluated".
+- The effort menu describes each level.
+- The header no longer shows a model, since it can now change between questions.
+
+**Checks.**
+- `check_setup` compares the catalog with the live Models API, at no cost.
+- `--all-models` makes a two-token call to each model.
+- `evaluate --model X --effort Y` scores any model and estimates the cost of the run.
+- The 23-question evaluation was **not** run on the new models, as agreed.
 
 ### Accounts (Steps 19 and 20)
 
@@ -237,8 +272,8 @@ Work is on the branch `sql_agent/platform/dev`, cut from `main` at `004d106`.
 | Step | What | Status | Commit |
 |---|---|---|---|
 | 16 | Design system, themes, router, icons, wider column | Done | `f01a0fa` |
-| 17 | Sidebar: rail, search, Pinned, Recents and All chats | Done | this step's commit |
-| 18 | Model and effort selection | Planned | |
+| 17 | Sidebar: rail, search, Pinned, Recents and All chats | Done | `93d0716`, `c0d3535` |
+| 18 | Model and effort selection | Done | this step's commits |
 | 19 | Accounts: backend | Planned | |
 | 20 | Accounts: interface and profile menu | Planned | |
 | 21 | Admin console: backend jobs and monitoring | Planned | |
@@ -303,6 +338,41 @@ older conversations added:
   to the header button.
 - No sideways scroll at 390px. Light and dark themes both checked.
 
+### Step 18
+
+| Check | After Step 17 | After Step 18 |
+|---|---|---|
+| Backend tests, no network | 384 passed, 3 skipped | 407 passed, 3 skipped |
+| Interface tests, no network | 130 passed | 140 passed |
+| Security catalogue | 78 of 78 | 78 of 78 |
+| Models API against the catalog | | All 6 offered with every effort |
+
+**Live check on all six models** (21 October 2026).
+- One question, "How many patients are in the database?", at high effort, through the full
+  agent: tools, streamed draft, checked structured answer.
+- All six answered 108, with a structured answer, a streamed draft and no traceability
+  warnings.
+- Spent about $0.45 of the $3 approved.
+
+| Model | Time | Tokens in / out | Cost | Note |
+|---|---|---|---|---|
+| Opus 5 | 6.4 s | 16,870 / 348 | $0.093 | |
+| Opus 5.5 | 5.5 s | 16,864 / 330 | $0.074 | Also noted 9 deceased patients |
+| Sonnet 5.5 | 4.0 s | 16,865 / 320 | $0.037 | |
+| Sonnet 5 | 6.0 s | 25,590 / 364 | $0.055 | Ran two queries |
+| Haiku 5.5 | 4.6 s | 16,902 / 320 | $0.002 | |
+| Fable 5.1 | 4.4 s | 16,816 / 233 | $0.180 | |
+
+This shows each model works with the agent. It does not show they are equally accurate on
+harder questions: that needs `evaluate --model`.
+
+**Checked in headless Chrome** against a running service:
+- The picker started on Opus 5 at high effort.
+- Choosing Haiku 5.5 and low effort, then asking, sent both. The answer read "claude-haiku-5-5
+  at low effort", and the run log recorded the same.
+- Opening that conversation's address restored Haiku 5.5 and low effort in the picker.
+- At 390 px the two menus fit beside the send button, with no sideways scroll.
+
 ## Demo notes
 
 To be written at Step 23. Things worth showing so far:
@@ -310,3 +380,6 @@ To be written at Step 23. Things worth showing so far:
 - Copying a conversation's address into a new tab, where it opens.
 - Collapsing the sidebar to the rail and back: the toggle does not move.
 - Pinning a chat, then pressing Ctrl+K and searching for a word from a follow-up question.
+- Asking the same question on Haiku 5.5 at low effort and on Opus 5 at high effort, and
+  comparing the two answers' meta lines: time, tokens and model. Point at "Not yet
+  evaluated" in the menu: the picker says plainly which models have been scored.

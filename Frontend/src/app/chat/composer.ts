@@ -1,12 +1,14 @@
 import { Component, computed, input, output, signal } from '@angular/core';
 import { LucideArrowUp } from '@lucide/angular';
 
+import { ModelCatalog, ModelChoice } from '../api/types';
 import { MAX_QUESTION_CHARS } from './chat-store';
+import { ModelPicker } from './model-picker';
 
 /** The question box. Enter sends, Shift+Enter starts a new line. */
 @Component({
   selector: 'app-composer',
-  imports: [LucideArrowUp],
+  imports: [LucideArrowUp, ModelPicker],
   template: `
     <form class="composer" (submit)="send($event)">
       <label class="visually-hidden" for="question">Your question</label>
@@ -20,6 +22,13 @@ import { MAX_QUESTION_CHARS } from './chat-store';
         (keydown.enter)="onEnter($any($event))"
       ></textarea>
       <div class="actions">
+        <app-model-picker
+          class="picker"
+          [catalog]="catalog()"
+          [choice]="choice()"
+          [disabled]="busy()"
+          (choiceChange)="choiceChange.emit($event)"
+        />
         @if (text().length > max * 0.8) {
           <span class="count">{{ text().length }} / {{ max }}</span>
         }
@@ -71,8 +80,11 @@ import { MAX_QUESTION_CHARS } from './chat-store';
     .actions {
       display: flex;
       align-items: center;
-      justify-content: flex-end;
       gap: var(--space-2);
+    }
+    .picker {
+      flex: 1;
+      margin-left: calc(-1 * var(--space-2));
     }
     .count {
       color: var(--text-subtle);
@@ -88,6 +100,9 @@ export class Composer {
   readonly busy = input(false);
   readonly placeholder = input('Ask a question about the patient data');
   readonly ask = output<string>();
+  readonly catalog = input<ModelCatalog | null>(null);
+  readonly choice = input<ModelChoice | null>(null);
+  readonly choiceChange = output<ModelChoice>();
 
   protected readonly max = MAX_QUESTION_CHARS;
   protected readonly text = signal('');
