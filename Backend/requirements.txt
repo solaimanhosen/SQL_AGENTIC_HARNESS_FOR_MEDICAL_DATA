@@ -14,8 +14,10 @@ sqlglot>=30,<31
 # The semantic layer files
 PyYAML>=6.0,<7
 
-# Data loading and analysis
+# Data loading and analysis. SciPy supplies the exact tests behind the analytics tools
+# (Documents/decisions/0004-analytics-tools.md).
 pandas>=2.0
+scipy>=1.16,<2
 SQLAlchemy>=2.0,<3
 
 # The HTTP service the web interface calls
