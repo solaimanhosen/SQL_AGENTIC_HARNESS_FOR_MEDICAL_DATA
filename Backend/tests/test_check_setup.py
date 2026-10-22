@@ -37,3 +37,34 @@ def test_table_count_ignores_sqlite_internal_tables(capsys):
         pytest.skip("synthea.db not built; run python -m sql_agent.load_data")
     assert check_setup.check_database(settings) is True
     assert "18 tables" in capsys.readouterr().out
+
+
+def _listed(model_id, efforts=("low", "medium", "high", "xhigh", "max"), adaptive=True):
+    return {
+        "id": model_id,
+        "capabilities": {
+            "thinking": {"types": {"adaptive": {"supported": adaptive}}},
+            "effort": {level: {"supported": level in efforts} for level in ("low", "medium", "high", "xhigh", "max")},
+        },
+    }
+
+
+def test_the_catalog_agrees_with_a_model_list_that_offers_everything():
+    from sql_agent.models import CATALOG
+
+    assert check_setup.catalog_problems([_listed(option.id) for option in CATALOG]) == []
+
+
+def test_a_missing_model_or_effort_or_thinking_mode_is_reported():
+    from sql_agent.models import CATALOG
+
+    listed = [_listed(option.id) for option in CATALOG if option.id != "claude-sonnet-5-5"]
+    listed = [
+        _listed(item["id"], efforts=("low", "medium", "high")) if item["id"] == "claude-haiku-5-5" else item
+        for item in listed
+    ]
+    listed = [_listed(item["id"], adaptive=False) if item["id"] == "claude-sonnet-5" else item for item in listed]
+    problems = check_setup.catalog_problems(listed)
+    assert "claude-sonnet-5-5 is not offered to this API key" in problems
+    assert "claude-haiku-5-5 does not accept effort xhigh, max" in problems
+    assert "claude-sonnet-5 does not accept adaptive thinking" in problems

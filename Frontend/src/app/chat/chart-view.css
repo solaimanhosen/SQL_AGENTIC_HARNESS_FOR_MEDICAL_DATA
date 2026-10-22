@@ -4,51 +4,37 @@
 }
 
 .chart {
-  margin: 1rem 0 0;
+  margin: var(--space-4) 0 0;
 }
 
 figcaption {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.2rem 0.5rem;
-  margin-bottom: 0.4rem;
+  gap: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-1-5);
 }
 
 .title {
-  font-weight: 600;
-  font-size: 0.92rem;
-}
-
-.cite {
-  padding: 0 0.4rem;
-  border: 0;
-  border-radius: 0.3rem;
-  background: var(--chip);
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-
-.cite:hover {
-  color: var(--accent);
-  text-decoration: underline;
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-sm);
 }
 
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.2rem 0.9rem;
-  margin: 0 0 0.3rem;
+  gap: var(--space-1) var(--space-4);
+  margin: 0 0 var(--space-1);
   padding: 0;
   list-style: none;
-  font-size: 0.8rem;
+  font-size: var(--text-xs);
   color: var(--text-muted);
 }
 
 .legend li {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--space-1-5);
 }
 
 .key {
@@ -75,11 +61,8 @@ svg {
   display: block;
   max-width: 100%;
   overflow: visible;
-  font:
-    11px system-ui,
-    -apple-system,
-    'Segoe UI',
-    sans-serif;
+  font-family: var(--font-sans);
+  font-size: 11px;
 }
 
 svg:focus {
@@ -89,7 +72,7 @@ svg:focus {
 svg:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
-  border-radius: 0.3rem;
+  border-radius: var(--radius-sm);
 }
 
 .tick {
@@ -147,12 +130,12 @@ svg:focus-visible {
   position: absolute;
   top: 0;
   min-width: 9rem;
-  padding: 0.4rem 0.6rem;
+  padding: var(--space-1-5) var(--space-2-5);
   border: 1px solid var(--border);
-  border-radius: 0.4rem;
+  border-radius: var(--radius-sm);
   background: var(--surface);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
-  font-size: 0.8rem;
+  box-shadow: var(--shadow-2);
+  font-size: var(--text-xs);
   pointer-events: none;
 }
 
@@ -167,7 +150,7 @@ svg:focus-visible {
 .readout .row {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-1-5);
 }
 
 .readout strong {
@@ -181,7 +164,7 @@ svg:focus-visible {
 .axis-note {
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 .s1 {

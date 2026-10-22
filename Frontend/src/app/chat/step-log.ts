@@ -23,21 +23,21 @@ import { describeStep } from './steps';
   styles: `
     .steps {
       display: grid;
-      gap: 0.4rem;
-      margin: 0.6rem 0 0;
-      padding-left: 1.4rem;
-      font-size: 0.85rem;
+      gap: var(--space-1-5);
+      margin: var(--space-2-5) 0 0;
+      padding-left: var(--space-6);
+      font-size: var(--text-sm);
       color: var(--text-muted);
     }
     pre {
-      margin-top: 0.3rem;
+      margin-top: var(--space-1);
     }
     .bad span,
     .detail {
       color: var(--warning-text);
     }
     .detail {
-      margin: 0.2rem 0 0;
+      margin: var(--space-1) 0 0;
     }
   `,
 })

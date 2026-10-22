@@ -18,12 +18,13 @@ if TYPE_CHECKING:
     from .tools import QueryRecord
 
 
-def build_record(result: "AgentResult", *, conversation_id: str | None = None) -> dict:
+def build_record(result: "AgentResult", *, conversation_id: str | None = None, user_id: str | None = None) -> dict:
     """The full run as plain data, safe to serialise and to diff."""
     structured = result.structured
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "conversation_id": conversation_id,
+        "user_id": user_id,
         "previous_questions": [turn.question for turn in result.history],
         "question": result.question,
         "answer": result.answer,
@@ -46,6 +47,7 @@ def build_record(result: "AgentResult", *, conversation_id: str | None = None) -
         "issues": asdict(result.issues),
         "as_of": str(result.as_of),
         "model": result.model,
+        "effort": result.effort,
         "elapsed_s": round(result.elapsed_s, 2),
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
@@ -59,10 +61,12 @@ def _query_record(record: "QueryRecord") -> dict:
     return data
 
 
-def log_run(result: "AgentResult", path: Path, *, conversation_id: str | None = None) -> Path:
-    """Append one run to the log, creating the folder if needed."""
+def log_run(
+    result: "AgentResult", path: Path, *, conversation_id: str | None = None, user_id: str | None = None
+) -> Path:
+    """Append one run to the log, creating the folder if needed. The user is named by id, never email."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    record = build_record(result, conversation_id=conversation_id)
+    record = build_record(result, conversation_id=conversation_id, user_id=user_id)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     return path

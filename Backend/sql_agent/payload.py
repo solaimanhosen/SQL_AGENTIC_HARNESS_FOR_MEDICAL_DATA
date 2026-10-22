@@ -114,6 +114,8 @@ class AnswerOut(BaseModel):
     """Drawn only from the run. Answers stored before charts existed have none."""
     as_of: date
     model: str
+    effort: str | None = None
+    """The effort the model ran at. Missing from answers stored before it was recorded."""
     elapsed_s: float
     input_tokens: int
     output_tokens: int
@@ -175,6 +177,7 @@ def answer_payload(result: AgentResult, layer: SemanticLayer, *, conversation_id
         charts=[chart_payload(chart) for chart in result.charts],
         as_of=result.as_of,
         model=result.model,
+        effort=result.effort,
         elapsed_s=round(result.elapsed_s, 2),
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,

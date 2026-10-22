@@ -1,7 +1,16 @@
+import sqlite3
+
 import pytest
 
 from sql_agent.agent import Turn
-from sql_agent.conversations import ConversationBusy, ConversationStore, UnknownConversation
+from sql_agent.conversations import (
+    SCHEMA,
+    SCHEMA_VERSION,
+    ConversationBusy,
+    ConversationStore,
+    NewerSchema,
+    UnknownConversation,
+)
 
 
 def _turn(number: int) -> Turn:
@@ -179,3 +188,147 @@ def test_the_tokens_a_conversation_spent_are_kept_with_it(tmp_path):
     store.close()
     assert ConversationStore(path).tokens_spent(conversation_id) == 3500
     assert ConversationStore().tokens_spent("0" * 32) == 0
+
+
+def test_a_file_written_by_v3_is_upgraded_in_place_and_keeps_its_conversations(tmp_path):
+    path = tmp_path / "conversations.db"
+    old = sqlite3.connect(path)
+    old.executescript(SCHEMA)  # exactly what v3.0.0 created, with user_version 0
+    old.execute(
+        "INSERT INTO conversations (id, title, created_at, updated_at, turn_count) VALUES (?, ?, ?, ?, 1)",
+        ("a" * 32, "Old question", "2026-10-01T00:00:00+00:00", "2026-10-01T00:00:00+00:00"),
+    )
+    old.commit()
+    old.close()
+
+    store = ConversationStore(path)
+    assert store.schema_version() == SCHEMA_VERSION
+    (summary,) = store.list()
+    assert summary.title == "Old question" and summary.pinned_at is None
+    assert store.pin("a" * 32, True).pinned_at is not None
+    store.close()
+    assert ConversationStore(path).schema_version() == SCHEMA_VERSION, "opening again changes nothing"
+
+
+def test_a_new_file_starts_at_the_latest_version():
+    assert ConversationStore().schema_version() == SCHEMA_VERSION
+
+
+def test_a_file_from_a_newer_version_is_refused_untouched(tmp_path):
+    path = tmp_path / "conversations.db"
+    newer = sqlite3.connect(path)
+    newer.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    newer.close()
+    with pytest.raises(NewerSchema):
+        ConversationStore(path)
+    check = sqlite3.connect(path)
+    assert check.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
+    assert check.execute("SELECT name FROM sqlite_master").fetchall() == []
+
+
+def test_pinning_keeps_its_time_and_does_not_count_as_use():
+    store = ConversationStore()
+    first = _answered(store, question="first")
+    second = _answered(store, question="second")
+    pinned = store.pin(first, True)
+    assert pinned.pinned_at is not None
+    assert store.pin(first, True).pinned_at == pinned.pinned_at, "pinning again keeps the original time"
+    assert [summary.id for summary in store.list()] == [second, first], "the order of use is unchanged"
+    assert store.pin(first, False).pinned_at is None
+    with pytest.raises(UnknownConversation):
+        store.pin("0" * 32, True)
+
+
+def test_pinned_conversations_are_forgotten_only_after_unpinned_ones():
+    store = ConversationStore(max_conversations=2)
+    pinned = _answered(store, question="keep me")
+    store.pin(pinned, True)
+    older = _answered(store, question="older")
+    _answered(store, question="newest")
+    assert len(store) == 2
+    assert {summary.id for summary in store.list()} >= {pinned}
+    with pytest.raises(UnknownConversation):
+        store.get(older)
+
+
+def test_search_looks_in_titles_and_every_question_ignoring_case():
+    store = ConversationStore()
+    diabetes = _answered(store, question="How many have diabetes?")
+    _answered(store, diabetes, question="And HEART disease?")
+    visits = _answered(store, question="Emergency visits by month")
+    store.rename(visits, "ER trend")
+    assert [s.id for s in store.search("heart")] == [diabetes]
+    assert [s.id for s in store.search("  er   trend ")] == [visits]
+    assert {s.id for s in store.search("")} == {diabetes, visits}
+    assert store.search("cancer") == []
+
+
+def test_search_text_is_literal_so_wildcards_and_quotes_match_only_themselves():
+    store = ConversationStore()
+    percent = _answered(store, question="What % of patients smoke?")
+    _answered(store, question="Patients by age_band")
+    _answered(store, question="Plain question")
+    assert [s.id for s in store.search("%")] == [percent]
+    assert len(store.search("_")) == 1
+    assert store.search("' OR 1=1 --") == []
+    assert store.search("\\") == []
+
+
+def test_the_latest_answer_s_model_and_effort_are_remembered():
+    store = ConversationStore()
+    conversation_id, _, _ = store.begin(None)
+    store.finish(conversation_id, _turn(1), model="claude-haiku-5-5", effort="low")
+    assert (store.list()[0].last_model, store.list()[0].last_effort) == ("claude-haiku-5-5", "low")
+    store.begin(conversation_id)
+    store.finish(conversation_id, None)  # a failed run changes nothing
+    assert store.list()[0].last_model == "claude-haiku-5-5"
+
+
+def test_a_v3_file_also_gets_accounts_and_its_conversations_wait_for_an_owner(tmp_path):
+    path = tmp_path / "conversations.db"
+    old = sqlite3.connect(path)
+    old.executescript(SCHEMA)
+    old.execute(
+        "INSERT INTO conversations (id, title, created_at, updated_at, turn_count) VALUES (?, ?, ?, ?, 1)",
+        ("a" * 32, "Old question", "2026-10-01T00:00:00+00:00", "2026-10-01T00:00:00+00:00"),
+    )
+    old.commit()
+    old.close()
+
+    store = ConversationStore(path)
+    tables = {row[0] for row in store._db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"users", "sessions", "oauth_states", "app_settings"} <= tables
+    assert [summary.id for summary in store.list()] == ["a" * 32], "unowned until claimed"
+    assert store.list(owner="admin-id") == []
+    assert store.claim_unowned("admin-id") == 1
+    assert [summary.id for summary in store.list(owner="admin-id")] == ["a" * 32]
+    assert store.list() == []
+
+
+def test_another_owner_s_conversation_is_reported_as_unknown():
+    store = ConversationStore()
+    mine = _answered(store)
+    store.claim_unowned("ann")
+    for action in (
+        lambda: store.get(mine, owner="bo"),
+        lambda: store.rename(mine, "x", owner="bo"),
+        lambda: store.pin(mine, True, owner="bo"),
+        lambda: store.delete(mine, owner="bo"),
+        lambda: store.begin(mine, owner="bo"),
+    ):
+        with pytest.raises(UnknownConversation):
+            action()
+    assert store.get(mine, owner="ann").summary.id == mine
+
+
+def test_the_cap_is_per_owner_so_nobody_pushes_out_anyone_else():
+    store = ConversationStore(max_conversations=1)
+    ann, _, _ = store.begin(None, owner="ann")
+    store.finish(ann, _turn(1))
+    bo, _, _ = store.begin(None, owner="bo")
+    store.finish(bo, _turn(1))
+    assert len(store) == 2, "Bo's first conversation did not evict Ann's"
+    newer, _, _ = store.begin(None, owner="bo")
+    store.finish(newer, _turn(1))
+    assert [s.id for s in store.list(owner="bo")] == [newer]
+    assert [s.id for s in store.list(owner="ann")] == [ann]

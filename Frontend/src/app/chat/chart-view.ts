@@ -45,7 +45,7 @@ export class ChartView {
       `${chart.kind === 'bar' ? 'Bar' : 'Line'} chart: ${chart.title}. ` +
       `${chart.x.length} ${chart.x_label} values` +
       (this.multi() ? `, series ${names}.` : '.') +
-      ` The values are in the table of query ${chart.query_number}.`
+      (chart.query_number > 0 ? ` The values are in the table of query ${chart.query_number}.` : '')
     );
   });
   /** End labels for up to four lines, dropped if any two would collide. */

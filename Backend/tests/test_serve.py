@@ -12,26 +12,21 @@ def launched(monkeypatch, sample_db_path):
     return calls
 
 
-def test_an_open_service_refuses_to_listen_beyond_this_machine(launched, monkeypatch, capsys):
-    monkeypatch.setenv("SQL_AGENT_API_TOKEN", "")
+def test_plain_http_cookies_are_refused_beyond_this_machine(launched, monkeypatch, capsys):
+    monkeypatch.setenv("SQL_AGENT_SECURE_COOKIES", "false")
     assert serve.main(["--host", "0.0.0.0"]) == 1
-    assert "without SQL_AGENT_API_TOKEN" in capsys.readouterr().err
+    assert "SQL_AGENT_SECURE_COOKIES=false" in capsys.readouterr().err
     assert launched == []
 
 
-def test_with_a_token_it_may_listen_anywhere_and_requires_it(launched, monkeypatch):
-    monkeypatch.setenv("SQL_AGENT_API_TOKEN", "t" * 40)
+def test_with_secure_cookies_it_may_listen_anywhere(launched, monkeypatch):
+    monkeypatch.setenv("SQL_AGENT_SECURE_COOKIES", "true")
     assert serve.main(["--host", "0.0.0.0", "--port", "9000"]) == 0
-    assert launched == [{"api_token": "t" * 40}, {"host": "0.0.0.0", "port": 9000}]
+    assert launched == [{}, {"host": "0.0.0.0", "port": 9000}]
 
 
-def test_locally_it_runs_without_a_token(launched, monkeypatch):
-    monkeypatch.setenv("SQL_AGENT_API_TOKEN", "")
+def test_locally_it_runs_with_plain_http_cookies(launched, monkeypatch, capsys):
+    monkeypatch.setenv("SQL_AGENT_SECURE_COOKIES", "false")
+    monkeypatch.delenv("SQL_AGENT_GOOGLE_CLIENT_ID", raising=False)
     assert serve.main([]) == 0
-    assert launched[0] == {"api_token": None}
-
-
-def test_a_short_token_is_a_settings_error(launched, monkeypatch, capsys):
-    monkeypatch.setenv("SQL_AGENT_API_TOKEN", "short")
-    assert serve.main([]) == 1
-    assert "at least 32 characters" in capsys.readouterr().err
+    assert "Google sign-in off" in capsys.readouterr().err

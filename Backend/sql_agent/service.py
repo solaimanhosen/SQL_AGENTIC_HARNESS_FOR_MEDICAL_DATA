@@ -25,28 +25,36 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import secrets
+import threading
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Literal
 
 import anthropic
 import anyio
-from fastapi import APIRouter, Depends, FastAPI, Path, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.datastructures import Headers
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .account_routes import InvalidCredentials, account_router
+from .admin_routes import SelfChange, admin_router
+from .accounts import AccountError, AccountStore, User
 from .agent import AgentError, AgentResult, SqlAgent, Turn, describe_failure
+from .appdb import AppDatabase
+from .auth import CSRF_HEADER, CsrfGuard, NotAllowed, NotSignedIn, Sessions, SignInThrottle, Throttled
+from .google_login import GoogleConfig, TokenExchange, exchange_code, load_google_config
+from .jobs import JobError, JobRunner
+from .passwords import PasswordRejected
 from .answer import Draft
 from .conversations import (
+    MAX_SEARCH_CHARS,
     MAX_TITLE_CHARS,
     ConversationBusy,
     ConversationStore,
@@ -54,6 +62,7 @@ from .conversations import (
     UnknownConversation,
 )
 from .limits import LimitExceeded, Reservation, SpendingLimits
+from .models import ModelChoiceError, available_models, resolve_choice
 from .requestlog import RequestLogMiddleware
 from .payload import AnswerOut, DefinitionOut, answer_payload, definition_payload
 from .report import CONTENT_SECURITY_POLICY, render_report, report_filename
@@ -68,7 +77,7 @@ logger = logging.getLogger(__name__)
 
 # What each kind of failure means to a caller. The agent could not answer the question as
 # asked, or the model provider failed, which is not the caller's fault.
-FAILURE_STATUS = {"agent": 422, "auth": 502, "api": 502, "connection": 503}
+FAILURE_STATUS = {"agent": 422, "stopped": 409, "auth": 502, "api": 502, "connection": 503}
 
 
 class AskRequest(BaseModel):
@@ -78,6 +87,32 @@ class AskRequest(BaseModel):
         pattern=CONVERSATION_ID_PATTERN,
         description="Continue this conversation. Leave it out to start a new one.",
     )
+    model: str | None = Field(
+        default=None, max_length=64, description="A model id from /api/models. Leave it out for the default."
+    )
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
+        default=None, description="Leave it out for the model's default."
+    )
+
+
+class ModelOut(BaseModel):
+    id: str
+    label: str
+    description: str
+    input_price: float
+    """USD per million input tokens, at the base rate."""
+    output_price: float
+    """USD per million output tokens, at the base rate."""
+    efforts: list[str]
+    default_effort: str
+    evaluated: str | None
+    """The evaluation result on this model, or null if it has not been evaluated."""
+
+
+class ModelsOut(BaseModel):
+    default_model: str
+    default_effort: str
+    models: list[ModelOut]
 
 
 class HealthOut(BaseModel):
@@ -115,6 +150,11 @@ class ConversationOut(BaseModel):
     updated_at: datetime
     turns: int
     """Questions answered in it so far."""
+    pinned_at: datetime | None = None
+    """When it was pinned, or nothing if it is not."""
+    last_model: str | None = None
+    """The model of its latest answer, so a reopened conversation continues with it."""
+    last_effort: str | None = None
 
 
 class StoredTurnOut(BaseModel):
@@ -132,8 +172,17 @@ class ConversationDetailOut(ConversationOut):
     history: list[StoredTurnOut]
 
 
-class RenameRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=MAX_TITLE_CHARS, pattern=r"\S")
+class UpdateConversationRequest(BaseModel):
+    """A new title, a pin or an unpin, or both. Fields left out are not changed."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=MAX_TITLE_CHARS, pattern=r"\S")
+    pinned: bool | None = None
+
+    @model_validator(mode="after")
+    def _something(self) -> "UpdateConversationRequest":
+        if self.title is None and self.pinned is None:
+            raise ValueError("Send a title, pinned, or both.")
+        return self
 
 
 ConversationId = Path(pattern=CONVERSATION_ID_PATTERN)
@@ -155,11 +204,28 @@ class UsageOut(BaseModel):
     daily_token_budget: int
 
 
-class Unauthorized(Exception):
-    """The request did not carry the shared token."""
-
-
 HTTP_ERROR_KINDS = {404: "not_found", 405: "method_not_allowed", 413: "too_large"}
+
+
+# Read Google's client from the environment unless a test passes one, or None for off.
+FROM_ENVIRONMENT = object()
+
+JOB_ERROR_STATUS = {
+    "unknown_job": 404,
+    "unknown_run": 404,
+    "job_busy": 409,
+    "not_running": 409,
+    "job_disabled": 403,
+    "invalid_choice": 422,
+}
+
+ACCOUNT_ERROR_STATUS = {
+    "email_taken": 409,
+    "registration_closed": 403,
+    "wrong_password": 403,
+    "unknown_session": 404,
+    "unknown_user": 404,
+}
 
 
 def create_app(
@@ -167,19 +233,31 @@ def create_app(
     conversations: ConversationStore | None = None,
     *,
     limits: SpendingLimits | None = None,
-    api_token: str | None = None,
+    accounts: AccountStore | None = None,
+    google: GoogleConfig | None | object = FROM_ENVIRONMENT,
+    token_exchange: TokenExchange = exchange_code,
+    throttle: SignInThrottle | None = None,
+    jobs: JobRunner | None = None,
 ) -> FastAPI:
     """Build the service around one agent, which is safe to share between requests.
 
     Each call to `answer` builds its own tools and graph, and the database opens a fresh
-    read-only connection per query, so concurrent questions do not share state. With
-    `api_token` set, every endpoint except health requires it as a bearer token.
+    read-only connection per query, so concurrent questions do not share state. Every
+    endpoint except health and signing in needs an account's session (see auth.py).
     """
     agent = agent or SqlAgent()
-    conversations = ConversationStore(agent.settings.conversations_path) if conversations is None else conversations
+    if conversations is None:
+        conversations = ConversationStore(database=AppDatabase(agent.settings.conversations_path))
+    accounts = AccountStore(conversations.database) if accounts is None else accounts
+    if google is FROM_ENVIRONMENT:
+        google = load_google_config(agent.settings.public_url)
+    sessions = Sessions(accounts)
     limits = SpendingLimits.from_settings(agent.settings) if limits is None else limits
+    jobs = JobRunner(conversations.database) if jobs is None else jobs
     # Streaming runs outlive their connection, so they are held here until they finish.
     background: set[asyncio.Task] = set()
+    # The question each conversation is answering, so Stop can reach it.
+    running: dict[str, _Claim] = {}
     app = FastAPI(
         title="SQL agent",
         summary="Questions about synthetic patient data, answered with traceable SQL.",
@@ -188,28 +266,21 @@ def create_app(
     # Added innermost first: the request log wraps everything, so refusals are logged too.
     # Starlette's limit counts the bytes of a body that does not declare its length, and
     # the check outside it refuses a declared oversized body with the usual error shape.
+    app.add_middleware(CsrfGuard, allowed_origins=agent.settings.cors_origins)
     app.add_middleware(RequestBodyLimitMiddleware, max_body_size=MAX_BODY_BYTES)
     app.add_middleware(DeclaredLengthLimit, max_body_size=MAX_BODY_BYTES)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(agent.settings.cors_origins),
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["Content-Type", "Authorization"],
+        allow_headers=["Content-Type", CSRF_HEADER],
+        allow_credentials=True,
     )
     if agent.settings.request_log_path is not None:
         app.add_middleware(RequestLogMiddleware, path=agent.settings.request_log_path)
 
-    bearer = HTTPBearer(auto_error=False, description="The shared token, when the service is configured with one.")
-
-    def require_token(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> None:
-        if api_token is None:
-            return
-        supplied = credentials.credentials if credentials else ""
-        if not secrets.compare_digest(supplied.encode(), api_token.encode()):
-            raise Unauthorized()
-        request.state.authenticated = True
-
-    protected = APIRouter(dependencies=[Depends(require_token)])
+    signed_in = Depends(sessions.current)
+    protected = APIRouter(dependencies=[signed_in])
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -224,12 +295,43 @@ def create_app(
     async def failed(_: Request, exc: Exception) -> JSONResponse:
         return _error(*_failure(exc))
 
-    @app.exception_handler(Unauthorized)
-    async def unauthorized(request: Request, _: Unauthorized) -> JSONResponse:
-        request.state.refused = "unauthorized"
-        response = _error(401, "unauthorized", "Send the service token as: Authorization: Bearer <token>.")
-        response.headers["WWW-Authenticate"] = "Bearer"
+    @app.exception_handler(NotSignedIn)
+    async def not_signed_in(request: Request, _: NotSignedIn) -> JSONResponse:
+        request.state.refused = "unauthenticated"
+        return _error(401, "unauthenticated", "Sign in to continue.")
+
+    @app.exception_handler(InvalidCredentials)
+    async def invalid_credentials(request: Request, _: InvalidCredentials) -> JSONResponse:
+        request.state.refused = "invalid_credentials"
+        return _error(401, "invalid_credentials", "The email or password is not correct.")
+
+    @app.exception_handler(NotAllowed)
+    async def not_allowed(request: Request, _: NotAllowed) -> JSONResponse:
+        request.state.refused = "forbidden"
+        return _error(403, "forbidden", "This needs an administrator.")
+
+    @app.exception_handler(Throttled)
+    async def throttled(request: Request, _: Throttled) -> JSONResponse:
+        request.state.refused = "too_many_attempts"
+        response = _error(429, "too_many_attempts", "Too many failed sign-ins. Wait a few minutes and try again.")
+        response.headers["Retry-After"] = "600"
         return response
+
+    @app.exception_handler(AccountError)
+    async def account_error(_: Request, exc: AccountError) -> JSONResponse:
+        return _error(ACCOUNT_ERROR_STATUS.get(exc.kind, 422), exc.kind, exc.message)
+
+    @app.exception_handler(JobError)
+    async def job_error(_: Request, exc: JobError) -> JSONResponse:
+        return _error(JOB_ERROR_STATUS.get(exc.kind, 422), exc.kind, exc.message)
+
+    @app.exception_handler(SelfChange)
+    async def self_change(_: Request, exc: SelfChange) -> JSONResponse:
+        return _error(409, "self_change", exc.message)
+
+    @app.exception_handler(PasswordRejected)
+    async def weak_password(_: Request, exc: PasswordRejected) -> JSONResponse:
+        return _error(422, "weak_password", str(exc))
 
     @app.exception_handler(LimitExceeded)
     async def limited(request: Request, exc: LimitExceeded) -> JSONResponse:
@@ -248,6 +350,10 @@ def create_app(
         else:
             message = str(exc.detail)
         return _error(exc.status_code, kind, message)
+
+    @app.exception_handler(ModelChoiceError)
+    async def model_choice(_: Request, exc: ModelChoiceError) -> JSONResponse:
+        return _error(422, "model_choice", str(exc))
 
     @app.exception_handler(UnknownConversation)
     async def unknown_conversation(_: Request, exc: UnknownConversation) -> JSONResponse:
@@ -284,13 +390,20 @@ def create_app(
         return [definition_payload(agent.layer, name) for name in agent.layer.definitions]
 
     @protected.get("/api/conversations")
-    def list_conversations() -> list[ConversationOut]:
-        """Conversations with at least one answer, most recently used first."""
-        return [_conversation_out(summary) for summary in conversations.list()]
+    def list_conversations(
+        q: str | None = Query(default=None, max_length=MAX_SEARCH_CHARS, description="Text to look for in titles and questions."),
+        user: User = signed_in,
+    ) -> list[ConversationOut]:
+        """Your conversations with at least one answer, most recently used first.
+
+        With `q`, only those whose title or any question contains it, at most 50.
+        """
+        found = conversations.search(q, owner=user.id) if q and q.strip() else conversations.list(owner=user.id)
+        return [_conversation_out(summary) for summary in found]
 
     @protected.get("/api/conversations/{conversation_id}")
-    def get_conversation(conversation_id: str = ConversationId) -> ConversationDetailOut:
-        stored = conversations.get(conversation_id)
+    def get_conversation(conversation_id: str = ConversationId, user: User = signed_in) -> ConversationDetailOut:
+        stored = conversations.get(conversation_id, owner=user.id)
         return ConversationDetailOut(
             **_conversation_out(stored.summary).model_dump(),
             busy=stored.busy,
@@ -308,9 +421,9 @@ def create_app(
         response_class=Response,
         responses={200: {"content": {"text/html": {}}, "description": "A self-contained HTML report, as a download."}},
     )
-    def report(conversation_id: str = ConversationId, turn: int = Path(ge=1)) -> Response:
+    def report(conversation_id: str = ConversationId, turn: int = Path(ge=1), user: User = signed_in) -> Response:
         """One stored answer as an HTML file that opens with no network."""
-        stored = conversations.get(conversation_id)
+        stored = conversations.get(conversation_id, owner=user.id)
         found = next((item for item in stored.turns if item.turn == turn and item.answer is not None), None)
         if found is None:
             return _error(404, "unknown_turn", f"This conversation has no answered question {turn}.")
@@ -331,30 +444,77 @@ def create_app(
         )
 
     @protected.patch("/api/conversations/{conversation_id}")
-    def rename_conversation(request: RenameRequest, conversation_id: str = ConversationId) -> ConversationOut:
-        return _conversation_out(conversations.rename(conversation_id, request.title))
+    def update_conversation(
+        request: UpdateConversationRequest, conversation_id: str = ConversationId, user: User = signed_in
+    ) -> ConversationOut:
+        """Rename, pin or unpin. Neither counts as using the conversation."""
+        summary = None
+        if request.title is not None:
+            summary = conversations.rename(conversation_id, request.title, owner=user.id)
+        if request.pinned is not None:
+            summary = conversations.pin(conversation_id, request.pinned, owner=user.id)
+        return _conversation_out(summary)
 
     @protected.delete("/api/conversations/{conversation_id}", status_code=204)
-    def delete_conversation(conversation_id: str = ConversationId) -> Response:
-        conversations.delete(conversation_id)
+    def delete_conversation(conversation_id: str = ConversationId, user: User = signed_in) -> Response:
+        conversations.delete(conversation_id, owner=user.id)
         return Response(status_code=204)
 
+    @protected.get("/api/models")
+    def models(user: User = signed_in) -> ModelsOut:
+        """The models you may pick, in the order to offer them, and where a new chat starts."""
+        default_model, default_effort = _defaults(agent, user)
+        return ModelsOut(
+            default_model=default_model,
+            default_effort=default_effort,
+            models=[
+                ModelOut(
+                    id=option.id,
+                    label=option.label,
+                    description=option.description,
+                    input_price=option.input_price,
+                    output_price=option.output_price,
+                    efforts=list(option.efforts),
+                    default_effort=agent.settings.effort if option.id == agent.settings.model else option.default_effort,
+                    evaluated=option.evaluated,
+                )
+                for option in available_models(admin=user.is_admin)
+            ],
+        )
+
+    @protected.post("/api/conversations/{conversation_id}/stop", status_code=202)
+    def stop_question(conversation_id: str = ConversationId, user: User = signed_in) -> dict:
+        """Stop the question this conversation is answering. Nothing is saved for it."""
+        conversations.get(conversation_id, owner=user.id)  # someone else's is unknown here
+        claim = running.get(conversation_id)
+        if claim is None:
+            return _error(409, "not_running", "This conversation is not answering a question.")
+        claim.stop.set()
+        return {"stopping": True}
+
     @protected.post("/api/ask")
-    async def ask(request: AskRequest) -> AnswerOut:
-        claim = _claim(conversations, limits, request.conversation_id)
-        return await _run(agent, conversations, limits, claim, request.question)
+    async def ask(request: AskRequest, user: User = signed_in) -> AnswerOut:
+        choice = _choose(agent, request, user)
+        claim = _claim(conversations, limits, request.conversation_id, user)
+        running[claim.conversation_id] = claim
+        try:
+            return await _run(agent, conversations, limits, claim, request.question, choice=choice)
+        finally:
+            running.pop(claim.conversation_id, None)
 
     @protected.post(
         "/api/ask/stream",
         response_class=StreamingResponse,
         responses={200: {"content": {"text/event-stream": {}}, "description": STREAM_DESCRIPTION}},
     )
-    async def ask_stream(request: AskRequest) -> StreamingResponse:
+    async def ask_stream(request: AskRequest, user: User = signed_in) -> StreamingResponse:
         # Claim the conversation and start the run before the stream starts, so an unknown
         # or busy conversation is an ordinary error response, and a reader that never
-        # arrives cannot leave the conversation claimed.
-        claim = _claim(conversations, limits, request.conversation_id)
-        events = _start(agent, conversations, limits, claim, request.question, background)
+        # arrives cannot leave the conversation claimed. The model choice is checked first.
+        choice = _choose(agent, request, user)
+        claim = _claim(conversations, limits, request.conversation_id, user)
+        running[claim.conversation_id] = claim
+        events = _start(agent, conversations, limits, claim, request.question, background, choice, running)
         return StreamingResponse(
             _relay(events, claim.conversation_id, claim.turn),
             media_type="text/event-stream",
@@ -362,6 +522,32 @@ def create_app(
         )
 
     app.include_router(protected)
+    app.include_router(
+        account_router(
+            accounts=accounts,
+            sessions=sessions,
+            settings=agent.settings,
+            google=google,
+            token_exchange=token_exchange,
+            throttle=throttle or SignInThrottle(),
+            limits=limits,
+            conversations=conversations,
+        )
+    )
+    app.include_router(
+        admin_router(
+            agent=agent,
+            accounts=accounts,
+            conversations=conversations,
+            limits=limits,
+            sessions=sessions,
+            jobs=jobs,
+            google_enabled=google is not None,
+        )
+    )
+    app.state.accounts = accounts
+    app.state.conversations = conversations
+    app.state.jobs = jobs
     return app
 
 
@@ -384,6 +570,49 @@ class DeclaredLengthLimit:
 
 
 @dataclass(frozen=True)
+class _Choice:
+    """The model and effort one question runs with, already checked against the catalog."""
+
+    model: str
+    effort: str
+
+
+def utc_midnight() -> str:
+    """The start of today in UTC, as stored times are written."""
+    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def _defaults(agent: SqlAgent, user: User) -> tuple[str, str]:
+    """Where a new chat starts: the person's own default if it is still offered to them."""
+    if user.default_model:
+        try:
+            option, effort = resolve_choice(
+                user.default_model,
+                user.default_effort,
+                default_model=agent.settings.model,
+                default_effort=agent.settings.effort,
+                admin=user.is_admin,
+            )
+            return option.id, effort
+        except ModelChoiceError:
+            pass  # a model since withdrawn, or one only admins may pick
+    return agent.settings.model, agent.settings.effort
+
+
+def _choose(agent: SqlAgent, request: AskRequest, user: User) -> _Choice:
+    """Check the model and effort asked for. Admin-only models are refused to everyone else."""
+    default_model, default_effort = _defaults(agent, user)
+    option, effort = resolve_choice(
+        request.model,
+        request.effort,
+        default_model=default_model,
+        default_effort=default_effort,
+        admin=user.is_admin,
+    )
+    return _Choice(option.id, effort)
+
+
+@dataclass(frozen=True)
 class _Claim:
     """A conversation claimed for one question, and the budget reserved for it."""
 
@@ -391,17 +620,27 @@ class _Claim:
     history: tuple[Turn, ...]
     turn: int
     reservation: Reservation
+    user_id: str | None = None
+    stop: threading.Event = field(default_factory=threading.Event)
+    """Set when the person presses Stop; the agent ends at its next step."""
 
 
-def _claim(conversations: ConversationStore, limits: SpendingLimits, conversation_id: str | None) -> _Claim:
+def _claim(
+    conversations: ConversationStore, limits: SpendingLimits, conversation_id: str | None, user: User
+) -> _Claim:
     """Claim the conversation, then the budget, releasing the conversation if that fails."""
-    conversation_id, history, turn = conversations.begin(conversation_id)
+    conversation_id, history, turn = conversations.begin(conversation_id, owner=user.id)
     try:
-        reservation = limits.reserve(conversation_id, already_spent=conversations.tokens_spent(conversation_id))
+        reservation = limits.reserve(
+            conversation_id,
+            already_spent=conversations.tokens_spent(conversation_id),
+            user_id=user.id,
+            user_spent_today=conversations.tokens_since(owner=user.id, since=utc_midnight()),
+        )
     except LimitExceeded:
         conversations.finish(conversation_id, None)
         raise
-    return _Claim(conversation_id, history, turn, reservation)
+    return _Claim(conversation_id, history, turn, reservation, user.id)
 
 
 STREAM_DESCRIPTION = """Server-sent events, read with fetch because the request is a POST.
@@ -424,6 +663,8 @@ async def _run(
     question: str,
     on_event: Callable[[str, str], None] | None = None,
     on_draft: Callable[[Draft], None] | None = None,
+    *,
+    choice: _Choice,
 ) -> AnswerOut:
     """Answer one claimed question, then store it, release its conversation and settle its budget."""
     result = answer = None
@@ -436,7 +677,16 @@ async def _run(
 
     try:
         result = await anyio.to_thread.run_sync(
-            _answer_and_log, agent, question, claim.history, claim.conversation_id, record_step, on_draft
+            _answer_and_log,
+            agent,
+            question,
+            claim.history,
+            claim.conversation_id,
+            record_step,
+            on_draft,
+            choice,
+            claim.user_id,
+            claim.stop.is_set,
         )
         answer = answer_payload(result, agent.layer, conversation_id=claim.conversation_id, turn=claim.turn)
         return answer
@@ -451,6 +701,8 @@ async def _run(
                 steps=steps,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
+                model=result.model,
+                effort=result.effort,
             )
         limits.settle(claim.reservation, result.input_tokens + result.output_tokens if result else None)
 
@@ -462,6 +714,9 @@ def _conversation_out(summary: ConversationSummary) -> ConversationOut:
         created_at=summary.created_at,
         updated_at=summary.updated_at,
         turns=summary.turn_count,
+        pinned_at=summary.pinned_at,
+        last_model=summary.last_model,
+        last_effort=summary.last_effort,
     )
 
 
@@ -481,10 +736,21 @@ def _answer_and_log(
     conversation_id: str,
     on_event: Callable[[str, str], None] | None,
     on_draft: Callable[[Draft], None] | None,
+    choice: _Choice,
+    user_id: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> AgentResult:
-    result = agent.answer(question, history=history, on_event=on_event, on_draft=on_draft)
+    result = agent.answer(
+        question,
+        history=history,
+        on_event=on_event,
+        on_draft=on_draft,
+        model=choice.model,
+        effort=choice.effort,
+        should_stop=should_stop,
+    )
     if agent.settings.log_path is not None:
-        log_run(result, agent.settings.log_path, conversation_id=conversation_id)
+        log_run(result, agent.settings.log_path, conversation_id=conversation_id, user_id=user_id)
     return result
 
 
@@ -495,6 +761,8 @@ def _start(
     claim: _Claim,
     question: str,
     background: set[asyncio.Task],
+    choice: _Choice,
+    running: dict[str, "_Claim"] | None = None,
 ) -> asyncio.Queue[tuple[str, dict]]:
     """Run the question as its own task, returning the queue its events arrive on.
 
@@ -520,7 +788,7 @@ def _start(
 
     async def run() -> None:
         try:
-            answer = await _run(agent, conversations, limits, claim, question, on_event, on_draft)
+            answer = await _run(agent, conversations, limits, claim, question, on_event, on_draft, choice=choice)
             events.put_nowait(("answer", answer.model_dump(mode="json")))
         except (AgentError, anthropic.APIError) as exc:
             status, kind, message = _failure(exc)
@@ -528,6 +796,9 @@ def _start(
         except Exception:
             logger.exception("Streaming question failed")
             events.put_nowait(("error", {"error": "internal", "message": "The service failed unexpectedly.", "status": 500}))
+        finally:
+            if running is not None:
+                running.pop(claim.conversation_id, None)
 
     task = asyncio.create_task(run())
     background.add(task)

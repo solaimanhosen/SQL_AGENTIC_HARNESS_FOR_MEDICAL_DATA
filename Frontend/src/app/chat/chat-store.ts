@@ -1,7 +1,16 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 
 import { AgentApi, ApiError } from '../api/agent-api';
-import { Answer, ConversationSummary, Draft, Step } from '../api/types';
+import { Toasts } from '../ui/toasts';
+import {
+  Answer,
+  ConversationChanges,
+  ConversationSummary,
+  Draft,
+  ModelCatalog,
+  ModelChoice,
+  Step,
+} from '../api/types';
 
 export const MAX_QUESTION_CHARS = 2000;
 
@@ -29,19 +38,58 @@ export interface Exchange {
 @Injectable({ providedIn: 'root' })
 export class ChatStore {
   private readonly api = inject(AgentApi);
+  private readonly toasts = inject(Toasts);
+  /** Ends the stream of the question being answered, if Stop is pressed before it has an id. */
+  private abort: AbortController | null = null;
   private nextId = 1;
 
   readonly exchanges = signal<Exchange[]>([]);
   readonly conversationId = signal<string | null>(null);
   /** Stored conversations, most recently used first. */
   readonly conversations = signal<ConversationSummary[]>([]);
+  /** False until the list has been asked for once, so the sidebar can show placeholders. */
+  readonly listLoaded = signal(false);
+  /** True while a stored conversation is being fetched. */
+  readonly opening = signal(false);
+  /** True from pressing Stop until the question has ended. */
+  readonly stopping = signal(false);
+  /** Conversations matching the search text, or null when nothing is being searched. */
+  readonly searchResults = signal<ConversationSummary[] | null>(null);
+  /** Counts searches, so an answer to an older one never replaces a newer one's. */
+  private searchCount = 0;
   /** Replaceable in tests, so recovering a lost stream does not wait on a real clock. */
   wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
   readonly busy = computed(() =>
     this.exchanges().some((exchange) => exchange.status === 'working'),
   );
-  /** True after the service refused a question for want of the access token. */
-  readonly needsToken = signal(false);
+  /** The models on offer. Null until the service has said, when its default applies. */
+  readonly catalog = signal<ModelCatalog | null>(null);
+  /** The model and effort the next question runs on. It may change between questions. */
+  readonly choice = signal<ModelChoice | null>(null);
+
+  /**
+   * Fetch the models on offer, and start with the default if nothing is chosen yet, or with
+   * `reset`, after the person changed their default.
+   */
+  async loadModels({ reset = false }: { reset?: boolean } = {}): Promise<void> {
+    try {
+      const catalog = await this.api.models();
+      this.catalog.set(catalog);
+      if (reset || !this.choice()) {
+        this.useDefault();
+      }
+    } catch {
+      // Without the list the picker stays hidden and the service's default applies. An
+      // ended session is handled where every request reports it (Auth).
+    }
+  }
+
+  /** Change the model or effort. Only a combination the service offers is accepted. */
+  choose(choice: ModelChoice): void {
+    if (offers(this.catalog(), choice)) {
+      this.choice.set(choice);
+    }
+  }
 
   async ask(question: string): Promise<void> {
     question = question.trim();
@@ -63,23 +111,32 @@ export class ChatStore {
     await this.run(id, exchange.question);
   }
 
-  /** Forget the conversation, so the next question starts fresh. */
+  /** Forget the conversation, so the next question starts fresh, on the person's default model. */
   newConversation(): void {
     if (this.busy()) {
       return;
     }
     this.exchanges.set([]);
     this.conversationId.set(null);
+    this.useDefault();
+  }
+
+  /** The service's default for this person: their own default model, or the service's. */
+  private useDefault(): void {
+    const catalog = this.catalog();
+    if (catalog) {
+      this.choice.set({ model: catalog.default_model, effort: catalog.default_effort });
+    }
   }
 
   /** Fetch the list of stored conversations. A failure leaves the list as it was. */
   async refreshConversations(): Promise<void> {
     try {
       this.conversations.set(await this.api.conversations());
-    } catch (error) {
-      if (error instanceof ApiError && error.kind === 'unauthorized') {
-        this.needsToken.set(true);
-      }
+    } catch {
+      // Kept as it was; an ended session sends the person to sign in (Auth).
+    } finally {
+      this.listLoaded.set(true);
     }
   }
 
@@ -88,6 +145,7 @@ export class ChatStore {
     if (this.busy()) {
       return false;
     }
+    this.opening.set(true);
     try {
       const stored = await this.api.conversation(id);
       this.exchanges.set(
@@ -100,23 +158,73 @@ export class ChatStore {
         })),
       );
       this.conversationId.set(id);
+      // Continue on the model and effort its latest answer used, if they are still offered.
+      if (stored.last_model && stored.last_effort) {
+        this.choose({ model: stored.last_model, effort: stored.last_effort });
+      }
       return true;
     } catch (error) {
-      if (error instanceof ApiError && error.kind === 'unauthorized') {
-        this.needsToken.set(true);
-      } else if (error instanceof ApiError && error.kind === 'unknown_conversation') {
+      if (error instanceof ApiError && error.kind === 'unknown_conversation') {
         this.conversations.update((list) => list.filter((item) => item.id !== id));
+        this.toasts.error('That conversation was deleted or never existed.');
+      } else if (!(error instanceof ApiError && error.status === 401)) {
+        this.toasts.error('The conversation could not be opened. Try again.');
       }
       return false;
+    } finally {
+      this.opening.set(false);
     }
   }
 
   async rename(id: string, title: string): Promise<void> {
+    await this.update(id, { title });
+  }
+
+  /** Pin a conversation to the top of the list, or unpin it. */
+  async pin(id: string, pinned: boolean): Promise<void> {
+    await this.update(id, { pinned });
+  }
+
+  private async update(id: string, changes: ConversationChanges): Promise<void> {
     try {
-      const renamed = await this.api.renameConversation(id, title);
-      this.conversations.update((list) => list.map((item) => (item.id === id ? renamed : item)));
+      this.replace(await this.api.updateConversation(id, changes));
     } catch {
+      this.toasts.error(
+        changes.title !== undefined
+          ? 'The new title could not be saved.'
+          : 'The pin could not be changed.',
+      );
       await this.refreshConversations();
+    }
+  }
+
+  /** Put a changed conversation into the list, and into the search results if it is there. */
+  private replace(summary: ConversationSummary): void {
+    const swap = (list: ConversationSummary[]) =>
+      list.map((item) => (item.id === summary.id ? summary : item));
+    this.conversations.update(swap);
+    this.searchResults.update((found) => found && swap(found));
+  }
+
+  /**
+   * Search titles and questions on the service. Empty text ends the search. A failed search
+   * shows no results rather than an error, since the full list is still there.
+   */
+  async search(text: string): Promise<void> {
+    const count = ++this.searchCount;
+    if (!text.trim()) {
+      this.searchResults.set(null);
+      return;
+    }
+    try {
+      const found = await this.api.conversations(text);
+      if (count === this.searchCount) {
+        this.searchResults.set(found);
+      }
+    } catch (error) {
+      if (count === this.searchCount) {
+        this.searchResults.set([]);
+      }
     }
   }
 
@@ -129,11 +237,17 @@ export class ChatStore {
       await this.api.deleteConversation(id);
     } catch (error) {
       if (!(error instanceof ApiError) || error.kind !== 'unknown_conversation') {
+        this.toasts.error(
+          error instanceof ApiError && error.kind === 'busy'
+            ? 'That conversation is still answering. Delete it when it has finished.'
+            : 'The conversation could not be deleted.',
+        );
         await this.refreshConversations();
         return;
       }
     }
     this.conversations.update((list) => list.filter((item) => item.id !== id));
+    this.searchResults.update((found) => found && found.filter((item) => item.id !== id));
     if (id === this.conversationId()) {
       this.exchanges.set([]);
       this.conversationId.set(null);
@@ -146,8 +260,15 @@ export class ChatStore {
 
   private async run(id: number, question: string): Promise<void> {
     let turn: number | null = null;
+    this.abort = new AbortController();
     try {
-      for await (const event of this.api.askStream(question, this.conversationId())) {
+      const stream = this.api.askStream(
+        question,
+        this.conversationId(),
+        this.abort.signal,
+        this.choice(),
+      );
+      for await (const event of stream) {
         if (event.type === 'conversation') {
           this.conversationId.set(event.conversationId);
           turn = event.turn;
@@ -159,13 +280,14 @@ export class ChatStore {
           this.patch(id, { status: 'answered', answer: event.answer, draft: undefined });
         }
       }
-      this.needsToken.set(false);
       void this.refreshConversations();
     } catch (error) {
       const failure =
         error instanceof ApiError
           ? error
-          : new ApiError(0, 'error', 'Something went wrong in the page.');
+          : error instanceof DOMException && error.name === 'AbortError'
+            ? new ApiError(0, 'stopped', 'Stopped. Nothing was saved for this question.')
+            : new ApiError(0, 'error', 'Something went wrong in the page.');
       if (failure.kind === 'stream_ended' && turn !== null) {
         // Only the connection was lost. The service finishes the run and stores it.
         const answer = await this.recover(this.conversationId()!, turn);
@@ -175,15 +297,36 @@ export class ChatStore {
           return;
         }
       }
-      if (failure.kind === 'unauthorized') {
-        this.needsToken.set(true);
-      }
       if (failure.kind === 'unknown_conversation') {
         // The service restarted or forgot the conversation. The next question starts anew.
         this.conversationId.set(null);
       }
       this.patch(id, { status: 'failed', error: failure, draft: undefined });
+    } finally {
+      this.abort = null;
+      this.stopping.set(false);
     }
+  }
+
+  /**
+   * Stop the question being answered. The service ends the run at its next step and saves
+   * nothing for it. Before the conversation has an id, the stream is simply closed.
+   */
+  async stop(): Promise<void> {
+    if (!this.busy() || this.stopping()) {
+      return;
+    }
+    this.stopping.set(true);
+    const id = this.conversationId();
+    if (id) {
+      try {
+        await this.api.stopQuestion(id);
+        return; // the stream ends with a "stopped" error event
+      } catch {
+        // Fall through: at least stop following it here.
+      }
+    }
+    this.abort?.abort();
   }
 
   /** Wait for a run whose stream was lost to finish on the service, and fetch its answer. */
@@ -215,4 +358,10 @@ export class ChatStore {
       ),
     );
   }
+}
+
+/** Whether the catalog offers this model at this effort. */
+function offers(catalog: ModelCatalog | null, choice: ModelChoice): boolean {
+  const model = catalog?.models.find((item) => item.id === choice.model);
+  return !!model && model.efforts.includes(choice.effort);
 }

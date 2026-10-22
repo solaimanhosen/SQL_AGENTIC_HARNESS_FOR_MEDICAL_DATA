@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import time
 from datetime import date
 
 import anthropic
@@ -7,7 +8,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from sql_agent.agent import AgentError, AgentResult
+from sql_agent.accounts import AccountStore
+from sql_agent.agent import AgentError, AgentResult, AgentStopped
 from sql_agent.answer import AnswerIssues, ChartRequest, Draft, Finding, StructuredAnswer, TimeWindow
 from sql_agent.charts import resolve_charts
 from sql_agent.config import load_settings
@@ -22,7 +24,7 @@ from sql_agent.tools import AnalysisInfo, QueryRecord
 AS_OF = date(2026, 8, 16)
 
 
-def _result(question: str, history=()) -> AgentResult:
+def _result(question: str, history=(), model="claude-opus-5", effort="high") -> AgentResult:
     return AgentResult(
         question=question,
         answer="Eight patients have diabetes. [query 1]",
@@ -46,7 +48,8 @@ def _result(question: str, history=()) -> AgentResult:
             QueryRecord(sql="DROP TABLE conditions", error="UnsafeQueryError: only SELECT"),
         ),
         as_of=AS_OF,
-        model="claude-opus-5",
+        model=model,
+        effort=effort,
         elapsed_s=4.321,
         input_tokens=1200,
         output_tokens=150,
@@ -57,18 +60,21 @@ def _result(question: str, history=()) -> AgentResult:
 class StubAgent:
     """Stands in for SqlAgent: real settings, database and layer, but no model calls."""
 
-    def __init__(self, settings, db, *, fail_with: Exception | None = None):
+    def __init__(self, settings, db, *, fail_with: Exception | None = None, wait_to_be_stopped: bool = False):
         self.settings = settings
         self.db = db
         self.layer = load_semantic_layer()
         self.as_of = AS_OF
         self.fail_with = fail_with
+        self.wait_to_be_stopped = wait_to_be_stopped
         self.questions = []
         self.histories = []
+        self.choices = []
 
-    def answer(self, question, *, history=(), on_event=None, on_draft=None):
+    def answer(self, question, *, history=(), on_event=None, on_draft=None, model=None, effort=None, should_stop=None):
         self.questions.append(question)
         self.histories.append(tuple(history))
+        self.choices.append((model, effort))
         if on_event is not None:
             on_event("sql", "SELECT COUNT(*) AS n FROM conditions")
             on_event("sql_result", "1 rows in 3 ms")
@@ -77,7 +83,15 @@ class StubAgent:
             on_draft(Draft(headline="Eight patients have diabetes.", findings=("8 patients match",)))
         if self.fail_with is not None:
             raise self.fail_with
-        return _result(question, history)
+        if self.wait_to_be_stopped:
+            # Like the real agent: it checks at each step, and ends once it is told to stop.
+            deadline = time.monotonic() + 10
+            while not (should_stop and should_stop()):
+                if time.monotonic() > deadline:
+                    raise AssertionError("never stopped")
+                time.sleep(0.01)
+            raise AgentStopped("Stopped before the answer was finished. Nothing was saved for this question.")
+        return _result(question, history, model or self.settings.model, effort or self.settings.effort)
 
 
 @pytest.fixture
@@ -88,6 +102,7 @@ def settings(sample_db_path, tmp_path):
         log_path=tmp_path / "runs.jsonl",
         request_log_path=tmp_path / "requests.jsonl",
         conversations_path=None,
+        secure_cookies=False,
     )
 
 
@@ -96,9 +111,37 @@ def db(sample_db_path):
     return ReadOnlyDatabase(sample_db_path, max_rows=10, timeout_seconds=5)
 
 
-def _client(settings, db, *, conversations=None, limits=None, api_token=None, **kwargs):
+TEST_EMAIL = "ann@example.org"
+TEST_PASSWORD = "a long enough password"
+# What the interface sends with every request, so the cross-site check lets it through.
+CSRF = {"X-Requested-With": "sql-agent"}
+
+
+def _client(settings, db, *, conversations=None, limits=None, signed_in=True, admin=False, **kwargs):
     agent = StubAgent(settings, db, **kwargs)
-    return TestClient(create_app(agent, conversations, limits=limits, api_token=api_token)), agent
+    client = TestClient(create_app(agent, conversations, limits=limits, google=None), headers=CSRF)
+    if signed_in:
+        _sign_in(client, admin=admin)
+    return client, agent
+
+
+def _sign_in(client, email=TEST_EMAIL, *, admin=False):
+    """Make the account if it is new, then sign in through the real route, as a browser would."""
+    accounts = client.app.state.accounts
+    user = accounts.find_by_email(email) or accounts.create_user(email, password=TEST_PASSWORD)
+    if admin:
+        accounts.set_role(user.id, "admin")
+    response = client.post("/api/auth/login", json={"email": email, "password": TEST_PASSWORD})
+    assert response.status_code == 200, response.text
+    client.user_id = user.id
+    return user
+
+
+def _second_user(client, email="bo@example.org"):
+    """Another person using the same service, in their own browser."""
+    other = TestClient(client.app, headers=CSRF)
+    _sign_in(other, email)
+    return other
 
 
 def _events(response):
@@ -266,7 +309,7 @@ def test_a_malformed_conversation_id_is_refused(settings, db):
 def test_a_conversation_answers_one_question_at_a_time(settings, db):
     store = ConversationStore()
     client, agent = _client(settings, db, conversations=store)
-    conversation_id, _, _ = store.begin(None)
+    conversation_id, _, _ = store.begin(None, owner=client.user_id)
     response = client.post("/api/ask", json={"question": "q", "conversation_id": conversation_id})
     assert response.status_code == 409 and response.json()["error"] == "busy"
     assert agent.questions == []
@@ -275,10 +318,10 @@ def test_a_conversation_answers_one_question_at_a_time(settings, db):
 def test_a_failed_question_frees_the_conversation_and_adds_no_turn(settings, db):
     store = ConversationStore()
     client, agent = _client(settings, db, conversations=store, fail_with=AgentError("stopped"))
-    conversation_id, _, _ = store.begin(None)
+    conversation_id, _, _ = store.begin(None, owner=client.user_id)
     store.finish(conversation_id, None)
     assert client.post("/api/ask", json={"question": "q", "conversation_id": conversation_id}).status_code == 422
-    _, history, turn = store.begin(conversation_id)
+    _, history, turn = store.begin(conversation_id, owner=client.user_id)
     assert history == () and turn == 1
 
 
@@ -333,28 +376,25 @@ def test_the_stream_refuses_an_unknown_conversation_before_it_starts(settings, d
 def test_a_run_whose_reader_never_arrives_still_finishes_and_frees_the_conversation(settings, db):
     import asyncio
 
-    from sql_agent.service import _claim, _start
+    from sql_agent.service import _Choice, _claim, _start
 
     store = ConversationStore()
     limits = SpendingLimits.from_settings(settings)
     agent = StubAgent(settings, db)
+    user = AccountStore(store.database).create_user("ann@example.org", password=TEST_PASSWORD)
 
     async def ask_and_walk_away():
         background = set()
-        claim = _claim(store, limits, None)
-        _start(agent, store, limits, claim, "How many have diabetes?", background)
+        claim = _claim(store, limits, None, user)
+        _start(agent, store, limits, claim, "How many have diabetes?", background, _Choice("claude-opus-5", "high"))
         await asyncio.gather(*background)
         return claim.conversation_id
 
     conversation_id = asyncio.run(ask_and_walk_away())
-    _, history, turn = store.begin(conversation_id)
+    _, history, turn = store.begin(conversation_id, owner=user.id)
     assert turn == 2 and history[0].question == "How many have diabetes?"
     assert json.loads(settings.log_path.read_text())["conversation_id"] == conversation_id
     assert limits.usage()["running"] == 0 and limits.usage()["spent_today"] == 1350
-
-
-TOKEN = "a-shared-token-that-is-long-enough-to-pass"
-AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 
 @pytest.mark.parametrize(
@@ -363,45 +403,61 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
         ("get", "/api/schema"),
         ("get", "/api/definitions"),
         ("get", "/api/usage"),
+        ("get", "/api/models"),
         ("get", "/api/conversations"),
         ("post", "/api/ask"),
         ("post", "/api/ask/stream"),
     ],
 )
-def test_with_a_token_configured_every_endpoint_but_health_requires_it(settings, db, method, path):
-    client, agent = _client(settings, db, api_token=TOKEN)
+def test_every_endpoint_but_health_and_signing_in_needs_a_session(settings, db, method, path):
+    client, agent = _client(settings, db, signed_in=False)
     kwargs = {"json": {"question": "q"}} if method == "post" else {}
-    for headers in ({}, {"Authorization": "Bearer wrong"}, {"Authorization": TOKEN}):
-        response = getattr(client, method)(path, headers=headers, **kwargs)
-        assert response.status_code == 401, headers
-        assert response.json()["error"] == "unauthorized"
-        assert response.headers["www-authenticate"] == "Bearer"
+    for cookie in (None, "not-a-session"):
+        if cookie:
+            client.cookies.set("sql_agent_session", cookie)
+        response = getattr(client, method)(path, **kwargs)
+        assert response.status_code == 401 and response.json()["error"] == "unauthenticated"
     assert agent.questions == []
-    assert getattr(client, method)(path, headers=AUTH, **kwargs).status_code == 200
+    client.cookies.clear()
+    _sign_in(client)
+    assert getattr(client, method)(path, **kwargs).status_code == 200
 
 
-def test_health_stays_open_so_a_monitor_needs_no_secret(settings, db):
-    client, _ = _client(settings, db, api_token=TOKEN)
+def test_health_and_the_sign_in_page_s_settings_stay_open(settings, db):
+    client, _ = _client(settings, db, signed_in=False)
     assert client.get("/api/health").status_code == 200
+    assert client.get("/api/auth/config").json() == {"registration_open": True, "google_enabled": False}
 
 
-def test_without_a_token_configured_the_service_is_open_for_local_development(settings, db):
-    client, _ = _client(settings, db)
-    assert client.post("/api/ask", json={"question": "q"}).status_code == 200
+def test_a_request_that_changes_something_must_come_from_the_application(settings, db):
+    client, agent = _client(settings, db)
+    bare = TestClient(client.app)  # no X-Requested-With, as a form on another site would send
+    bare.cookies = client.cookies
+    for response in (
+        bare.post("/api/ask", json={"question": "q"}),
+        client.post("/api/ask", json={"question": "q"}, headers={"Origin": "https://evil.example"}),
+        bare.post("/api/auth/logout"),
+    ):
+        assert response.status_code == 403 and response.json()["error"] == "cross_site"
+    assert agent.questions == []
+    allowed = client.post("/api/ask", json={"question": "q"}, headers={"Origin": "http://localhost:4200"})
+    assert allowed.status_code == 200
+    assert bare.get("/api/conversations").status_code == 200, "reading needs no header"
 
 
-def test_the_browser_preflight_needs_no_token(settings, db):
-    client, _ = _client(settings, db, api_token=TOKEN)
+def test_the_browser_preflight_allows_the_application_s_header(settings, db):
+    client, _ = _client(settings, db, signed_in=False)
     response = client.options(
         "/api/ask",
         headers={
             "Origin": "http://localhost:4200",
             "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "authorization,content-type",
+            "Access-Control-Request-Headers": "x-requested-with,content-type",
         },
     )
     assert response.status_code == 200
-    assert "authorization" in response.headers["access-control-allow-headers"].lower()
+    assert "x-requested-with" in response.headers["access-control-allow-headers"].lower()
+    assert response.headers["access-control-allow-credentials"] == "true"
 
 
 def test_an_oversized_body_is_refused_before_it_is_parsed(settings, db):
@@ -440,7 +496,7 @@ def test_a_refused_follow_up_leaves_the_conversation_free(settings, db):
     conversation_id = first["conversation_id"]
     response = client.post("/api/ask", json={"question": "second", "conversation_id": conversation_id})
     assert response.status_code == 429 and response.json()["error"] == "conversation_budget"
-    _, history, turn = store.begin(conversation_id)
+    _, history, turn = store.begin(conversation_id, owner=client.user_id)
     assert turn == 2 and len(history) == 1
     assert client.post("/api/ask", json={"question": "a new conversation"}).status_code == 200
 
@@ -452,18 +508,26 @@ def test_usage_reports_what_answered_questions_spent(settings, db):
     assert usage["spent_today"] == 1350 and usage["running"] == 0 and usage["reserved_today"] == 0
 
 
-def test_every_request_is_logged_including_refusals_and_never_the_token(settings, db):
-    client, _ = _client(settings, db, api_token=TOKEN)
+def test_every_request_is_logged_by_user_id_including_refusals_and_never_the_session(settings, db):
+    client, _ = _client(settings, db, signed_in=False)
     client.get("/api/health")
     client.post("/api/ask", json={"question": "q"})
-    client.post("/api/ask", json={"question": "q"}, headers=AUTH)
+    _sign_in(client)
+    client.post("/api/ask", json={"question": "q"})
     text = settings.request_log_path.read_text()
-    assert TOKEN not in text
-    health, refused, answered = [json.loads(line) for line in text.splitlines()]
-    assert (health["path"], health["status"], health["authenticated"]) == ("/api/health", 200, False)
-    assert (refused["status"], refused["refused"], refused["authenticated"]) == (401, "unauthorized", False)
-    assert (answered["path"], answered["status"], answered["authenticated"], answered["refused"]) == ("/api/ask", 200, True, None)
+    assert client.cookies.get("sql_agent_session") not in text and TEST_EMAIL not in text
+    records = [json.loads(line) for line in text.splitlines()]
+    health, refused, answered = records[0], records[1], records[-1]
+    assert (health["path"], health["status"], health["user_id"]) == ("/api/health", 200, None)
+    assert (refused["status"], refused["refused"], refused["user_id"]) == (401, "unauthenticated", None)
+    assert (answered["path"], answered["status"], answered["user_id"], answered["refused"]) == (
+        "/api/ask",
+        200,
+        client.user_id,
+        None,
+    )
     assert answered["elapsed_ms"] >= 0 and answered["method"] == "POST"
+    assert json.loads(settings.log_path.read_text().splitlines()[-1])["user_id"] == client.user_id
 
 
 def test_a_body_that_hides_its_length_is_still_cut_off(settings, db):
@@ -484,7 +548,7 @@ def test_an_answered_question_is_stored_with_its_rows_and_steps(settings, db):
     store = ConversationStore()
     client, _ = _client(settings, db, conversations=store)
     body = client.post("/api/ask", json={"question": "How many have diabetes?"}).json()
-    (turn,) = store.get(body["conversation_id"]).turns
+    (turn,) = store.get(body["conversation_id"], owner=client.user_id).turns
     assert turn.answer == body
     assert turn.answer["queries"][0]["rows"] == [[8]]
     assert turn.steps == [
@@ -499,7 +563,7 @@ def test_result_rows_can_be_left_out_of_what_is_stored(settings, db):
     client, _ = _client(dataclasses.replace(settings, store_result_rows=False), db, conversations=store)
     body = client.post("/api/ask", json={"question": "How many have diabetes?"}).json()
     assert body["queries"][0]["rows"] == [[8]], "the asker still gets the rows"
-    stored = store.get(body["conversation_id"]).turns[0].answer["queries"][0]
+    stored = store.get(body["conversation_id"], owner=client.user_id).turns[0].answer["queries"][0]
     assert stored["rows"] == [] and stored["row_count"] == 1 and stored["sql"]
 
 
@@ -643,23 +707,108 @@ def test_a_conversation_can_be_renamed_and_deleted(settings, db):
     assert len(agent.questions) == 1
 
 
+def test_a_conversation_can_be_pinned_and_unpinned(settings, db):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
+    assert client.get("/api/conversations").json()[0]["pinned_at"] is None
+
+    pinned = client.patch(f"/api/conversations/{conversation_id}", json={"pinned": True})
+    assert pinned.status_code == 200 and pinned.json()["pinned_at"] is not None
+    assert client.get("/api/conversations").json()[0]["pinned_at"] == pinned.json()["pinned_at"]
+
+    both = client.patch(f"/api/conversations/{conversation_id}", json={"title": "Kept", "pinned": False})
+    assert both.json()["title"] == "Kept" and both.json()["pinned_at"] is None
+    for body in ({}, {"pinned": "yes please"}, {"title": None, "pinned": None}):
+        assert client.patch(f"/api/conversations/{conversation_id}", json=body).status_code == 422
+
+
+def test_conversations_can_be_searched(settings, db):
+    client, _ = _client(settings, db)
+    diabetes = _ask(client, "How many have diabetes?")["conversation_id"]
+    _ask(client, "Emergency visits by month")
+    found = client.get("/api/conversations", params={"q": "DIABETES"})
+    assert found.status_code == 200 and [item["id"] for item in found.json()] == [diabetes]
+    assert len(client.get("/api/conversations", params={"q": "  "}).json()) == 2
+    assert client.get("/api/conversations", params={"q": "x" * 201}).status_code == 422
+
+
+def test_the_models_on_offer_are_listed_with_the_default(settings, db):
+    client, _ = _client(settings, db)
+    body = client.get("/api/models").json()
+    assert body["default_model"] == "claude-opus-5" and body["default_effort"] == "high"
+    ids = [model["id"] for model in body["models"]]
+    assert ids[0] == "claude-opus-5"
+    assert "claude-haiku-5-5" in ids and "claude-sonnet-5-5" in ids
+    assert "claude-fable-5-1" not in ids, "admins only, and nobody is an admin before accounts"
+    haiku = next(model for model in body["models"] if model["id"] == "claude-haiku-5-5")
+    assert haiku["efforts"] == ["low", "medium", "high", "xhigh", "max"]
+    assert haiku["input_price"] == 0.10 and haiku["evaluated"] is None
+
+
+def test_a_question_runs_on_the_model_and_effort_chosen_and_records_them(settings, db):
+    client, agent = _client(settings, db)
+    answer = client.post(
+        "/api/ask", json={"question": "How many?", "model": "claude-haiku-5-5", "effort": "low"}
+    ).json()
+    assert agent.choices[-1] == ("claude-haiku-5-5", "low")
+    assert (answer["model"], answer["effort"]) == ("claude-haiku-5-5", "low")
+
+    summary = client.get("/api/conversations").json()[0]
+    assert (summary["last_model"], summary["last_effort"]) == ("claude-haiku-5-5", "low")
+    stored = client.get(f"/api/conversations/{answer['conversation_id']}").json()
+    assert stored["history"][0]["answer"]["effort"] == "low"
+
+    # A follow-up may switch model; the conversation then remembers the new one.
+    client.post("/api/ask", json={"question": "And now?", "conversation_id": answer["conversation_id"]})
+    assert agent.choices[-1] == ("claude-opus-5", "high")
+    summary = client.get("/api/conversations").json()[0]
+    assert (summary["last_model"], summary["last_effort"]) == ("claude-opus-5", "high")
+
+
+def test_the_default_model_keeps_the_configured_effort_and_others_their_own(settings, db):
+    settings = dataclasses.replace(settings, effort="medium")
+    client, agent = _client(settings, db)
+    client.post("/api/ask", json={"question": "q"})
+    client.post("/api/ask", json={"question": "q", "model": "claude-sonnet-5-5"})
+    assert agent.choices == [("claude-opus-5", "medium"), ("claude-sonnet-5-5", "high")]
+
+
+@pytest.mark.parametrize(
+    "choice",
+    [
+        {"model": "claude-fable-5-1"},
+        {"model": "claude-haiku-4-5"},
+        {"model": "gpt-5"},
+        {"model": "claude-opus-5", "effort": "extreme"},
+    ],
+)
+def test_a_model_or_effort_not_on_offer_is_refused_before_anything_runs(settings, db, choice):
+    client, agent = _client(settings, db)
+    response = client.post("/api/ask", json={"question": "q", **choice})
+    assert response.status_code == 422
+    stream = client.post("/api/ask/stream", json={"question": "q", **choice})
+    assert stream.status_code == 422
+    assert agent.questions == [] and client.get("/api/conversations").json() == []
+
+
 def test_a_conversation_still_answering_cannot_be_deleted(settings, db):
     store = ConversationStore()
     client, _ = _client(settings, db, conversations=store)
-    conversation_id, _, _ = store.begin(None)
+    conversation_id, _, _ = store.begin(None, owner=client.user_id)
     response = client.delete(f"/api/conversations/{conversation_id}")
     assert response.status_code == 409 and response.json()["error"] == "busy"
     assert client.get(f"/api/conversations/{conversation_id}").json()["busy"] is True
 
 
 @pytest.mark.parametrize("method", ["get", "patch", "delete"])
-def test_managing_a_conversation_requires_the_token_and_a_well_formed_id(settings, db, method):
-    client, _ = _client(settings, db, api_token=TOKEN)
-    conversation_id = _ask(client, headers=AUTH)["conversation_id"]
+def test_managing_a_conversation_requires_a_session_and_a_well_formed_id(settings, db, method):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
     kwargs = {"json": {"title": "x"}} if method == "patch" else {}
-    assert getattr(client, method)(f"/api/conversations/{conversation_id}", **kwargs).status_code == 401
-    assert getattr(client, method)("/api/conversations/not-an-id", headers=AUTH, **kwargs).status_code == 422
-    assert getattr(client, method)(f"/api/conversations/{conversation_id}", headers=AUTH, **kwargs).status_code in (200, 204)
+    signed_out = TestClient(client.app, headers=CSRF)
+    assert getattr(signed_out, method)(f"/api/conversations/{conversation_id}", **kwargs).status_code == 401
+    assert getattr(client, method)("/api/conversations/not-an-id", **kwargs).status_code == 422
+    assert getattr(client, method)(f"/api/conversations/{conversation_id}", **kwargs).status_code in (200, 204)
 
 
 def test_the_browser_may_rename_and_delete_from_the_configured_origin(settings, db):
@@ -704,9 +853,162 @@ def test_a_report_for_a_question_that_was_not_answered_is_refused(settings, db):
     assert client.get(f"/api/conversations/{'f' * 32}/turns/1/report").json()["error"] == "unknown_conversation"
 
 
-def test_a_report_requires_the_token(settings, db):
-    client, _ = _client(settings, db, api_token=TOKEN)
-    conversation_id = _ask(client, headers=AUTH)["conversation_id"]
+def test_a_report_requires_a_session_and_belongs_to_its_owner(settings, db):
+    client, _ = _client(settings, db)
+    conversation_id = _ask(client)["conversation_id"]
     path = f"/api/conversations/{conversation_id}/turns/1/report"
-    assert client.get(path).status_code == 401
-    assert client.get(path, headers=AUTH).status_code == 200
+    assert TestClient(client.app).get(path).status_code == 401
+    assert client.get(path).status_code == 200
+    assert _second_user(client).get(path).status_code == 404
+
+
+def test_each_person_sees_and_touches_only_their_own_conversations(settings, db):
+    ann, agent = _client(settings, db)
+    mine = _ask(ann, "Ann's question")["conversation_id"]
+    bo = _second_user(ann)
+    theirs = _ask(bo, "Bo's question")["conversation_id"]
+
+    assert [item["id"] for item in ann.get("/api/conversations").json()] == [mine]
+    assert [item["id"] for item in bo.get("/api/conversations").json()] == [theirs]
+    assert bo.get("/api/conversations", params={"q": "Ann"}).json() == []
+    for response in (
+        bo.get(f"/api/conversations/{mine}"),
+        bo.patch(f"/api/conversations/{mine}", json={"title": "taken"}),
+        bo.patch(f"/api/conversations/{mine}", json={"pinned": True}),
+        bo.delete(f"/api/conversations/{mine}"),
+        bo.post("/api/ask", json={"question": "follow-up", "conversation_id": mine}),
+        bo.post("/api/ask/stream", json={"question": "follow-up", "conversation_id": mine}),
+    ):
+        # Exactly what a conversation that does not exist gets, so nothing is revealed.
+        assert response.status_code == 404 and response.json()["error"] == "unknown_conversation"
+    assert ann.get(f"/api/conversations/{mine}").json()["title"] == "Ann's question"
+    assert agent.questions == ["Ann's question", "Bo's question"]
+
+
+def test_admins_may_pick_admin_only_models_and_nobody_else_may(settings, db):
+    user, agent = _client(settings, db)
+    assert "claude-fable-5-1" not in [model["id"] for model in user.get("/api/models").json()["models"]]
+    assert user.post("/api/ask", json={"question": "q", "model": "claude-fable-5-1"}).status_code == 422
+
+    admin = _second_user(user, "admin@example.org")
+    user.app.state.accounts.set_role(admin.user_id, "admin")
+    assert "claude-fable-5-1" in [model["id"] for model in admin.get("/api/models").json()["models"]]
+    assert admin.post("/api/ask", json={"question": "q", "model": "claude-fable-5-1"}).status_code == 200
+    assert agent.choices[-1] == ("claude-fable-5-1", "high")
+
+
+def test_a_new_chat_starts_on_the_person_s_default_model(settings, db):
+    client, agent = _client(settings, db)
+    accounts = client.app.state.accounts
+    accounts.update_profile(client.user_id, default_model="claude-haiku-5-5", default_effort="low")
+    assert client.get("/api/models").json()["default_model"] == "claude-haiku-5-5"
+    client.post("/api/ask", json={"question": "q"})
+    assert agent.choices[-1] == ("claude-haiku-5-5", "low")
+    # A default only admins may use falls back to the service's default.
+    accounts.update_profile(client.user_id, default_model="claude-fable-5-1", default_effort="high")
+    client.post("/api/ask", json={"question": "q"})
+    assert agent.choices[-1] == ("claude-opus-5", "high")
+
+
+def test_each_person_has_a_daily_budget_of_their_own(settings, db):
+    limits = SpendingLimits(
+        max_concurrent_runs=4,
+        daily_token_budget=10**7,
+        conversation_token_budget=10**7,
+        user_daily_token_budget=100_000,
+        reserve_tokens=60_000,
+    )
+    ann, agent = _client(settings, db, limits=limits)
+    limits.settle(limits.reserve("elsewhere", user_id=ann.user_id), 50_000)
+    response = ann.post("/api/ask", json={"question": "q"})
+    assert response.status_code == 429 and response.json()["error"] == "user_budget"
+    assert _second_user(ann).post("/api/ask", json={"question": "q"}).status_code == 200
+
+def test_your_usage_shows_today_against_your_budget_and_this_month_by_model(settings, db):
+    client, _ = _client(settings, db)
+    client.post("/api/ask", json={"question": "q1"})
+    client.post("/api/ask", json={"question": "q2", "model": "claude-haiku-5-5", "effort": "low"})
+    client.post("/api/ask", json={"question": "q3", "model": "claude-haiku-5-5"})
+
+    usage = client.get("/api/account/usage").json()
+    assert usage["today_tokens"] == 3 * 1350 and usage["daily_budget"] == settings.user_daily_token_budget
+    assert (usage["questions"], usage["input_tokens"], usage["output_tokens"]) == (3, 3600, 450)
+    by_model = {item["model"]: item for item in usage["by_model"]}
+    assert by_model["claude-haiku-5-5"]["questions"] == 2 and by_model["claude-haiku-5-5"]["label"] == "Haiku 5.5"
+    # 1,200 in and 150 out at Opus 5's $5 and $25 per million.
+    assert by_model["claude-opus-5"]["estimated_cost_usd"] == pytest.approx(0.00975)
+    assert usage["estimated_cost_usd"] == pytest.approx(0.00975 + 2 * (1200 * 0.10 + 150 * 0.50) / 1e6, abs=1e-4)
+
+    other = _second_user(client).get("/api/account/usage").json()
+    assert other["questions"] == 0 and other["by_model"] == [] and other["today_tokens"] == 0
+
+
+def test_a_restart_does_not_reset_a_person_s_daily_budget(settings, db):
+    store = ConversationStore()
+    first, _ = _client(settings, db, conversations=store)
+    first.post("/api/ask", json={"question": "q"})  # 1,350 tokens, stored with the answer
+
+    # A new service on the same store: its ledger starts empty, as after a restart.
+    limits = SpendingLimits(
+        max_concurrent_runs=4,
+        daily_token_budget=10**7,
+        conversation_token_budget=10**7,
+        user_daily_token_budget=61_000,
+        reserve_tokens=60_000,
+    )
+    again, agent = _client(settings, db, conversations=store, limits=limits)
+    assert again.get("/api/account/usage").json()["today_tokens"] == 1350
+    response = again.post("/api/ask", json={"question": "q"})
+    assert response.status_code == 429 and response.json()["error"] == "user_budget"
+    assert agent.questions == []
+
+
+def test_a_question_can_be_stopped_and_nothing_is_saved_for_it(settings, db):
+    import threading
+
+    client, agent = _client(settings, db, wait_to_be_stopped=True)
+    responses = []
+    asking = threading.Thread(target=lambda: responses.append(client.post("/api/ask", json={"question": "q"})))
+    asking.start()
+    store = client.app.state.conversations
+    conversation_id = None
+    for _ in range(500):
+        busy = [row[0] for row in store._db.execute("SELECT id FROM conversations")]
+        if busy:
+            conversation_id = busy[0]
+            break
+        time.sleep(0.01)
+    assert conversation_id, "the question never started"
+
+    stopped = client.post(f"/api/conversations/{conversation_id}/stop")
+    assert stopped.status_code == 202 and stopped.json() == {"stopping": True}
+    asking.join(timeout=10)
+    assert responses[0].status_code == 409 and responses[0].json()["error"] == "stopped"
+    assert store.get(conversation_id, owner=client.user_id).turns == ()
+    assert client.post(f"/api/conversations/{conversation_id}/stop").status_code == 409, "nothing running now"
+    assert _second_user(client).post(f"/api/conversations/{conversation_id}/stop").status_code == 404
+
+
+def test_a_streamed_question_that_is_stopped_ends_with_a_stopped_event(settings, db):
+    import threading
+
+    client, _ = _client(settings, db, wait_to_be_stopped=True)
+    holder = {}
+
+    def ask():
+        with client.stream("POST", "/api/ask/stream", json={"question": "q"}) as response:
+            holder["text"] = "".join(response.iter_text())
+
+    asking = threading.Thread(target=ask)
+    asking.start()
+    store = client.app.state.conversations
+    for _ in range(500):
+        rows = store._db.execute("SELECT id FROM conversations").fetchall()
+        if rows:
+            break
+        time.sleep(0.01)
+    client.post(f"/api/conversations/{rows[0][0]}/stop")
+    asking.join(timeout=10)
+    events = [block.split("\n")[0] for block in holder["text"].strip().split("\n\n")]
+    assert events[0] == "event: conversation" and events[-1] == "event: error"
+    assert '"error": "stopped"' in holder["text"]

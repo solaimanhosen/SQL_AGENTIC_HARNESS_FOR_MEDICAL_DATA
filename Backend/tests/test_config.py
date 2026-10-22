@@ -1,6 +1,6 @@
 import pytest
 
-from sql_agent.config import BACKEND_DIR, ConfigError, load_api_token, load_settings
+from sql_agent.config import BACKEND_DIR, ConfigError, load_settings
 
 
 def test_defaults():
@@ -124,17 +124,24 @@ def test_service_limits_have_defaults_and_can_be_tuned():
     assert s.max_concurrent_runs == 2 and s.request_log_path is None
 
 
-def test_the_api_token_is_optional_long_and_never_in_settings():
-    assert load_api_token({}) is None
-    token = "t" * 32
-    assert load_api_token({"SQL_AGENT_API_TOKEN": f" {token} "}) == token
-    with pytest.raises(ConfigError, match="SQL_AGENT_API_TOKEN"):
-        load_api_token({"SQL_AGENT_API_TOKEN": "short"})
-    assert token not in repr(load_settings({"SQL_AGENT_API_TOKEN": token}))
-
+def test_account_settings_have_safe_defaults_and_are_checked():
+    s = load_settings({})
+    assert s.secure_cookies is True and s.registration_open is True
+    assert s.public_url == "http://localhost:4200" and s.user_daily_token_budget == 1_000_000
+    custom = load_settings({"SQL_AGENT_PUBLIC_URL": "https://agent.example.org/", "SQL_AGENT_REGISTRATION": "closed"})
+    assert custom.public_url == "https://agent.example.org" and custom.registration_open is False
+    for name, value in (("SQL_AGENT_PUBLIC_URL", "agent.example.org"), ("SQL_AGENT_REGISTRATION", "maybe")):
+        with pytest.raises(ConfigError, match=name):
+            load_settings({name: value})
 
 def test_conversations_are_stored_by_default_and_can_be_kept_in_memory():
     s = load_settings({})
     assert s.conversations_path == BACKEND_DIR / "data" / "conversations.db" and s.store_result_rows is True
     s = load_settings({"SQL_AGENT_CONVERSATIONS_PATH": "off", "SQL_AGENT_STORE_RESULT_ROWS": "false"})
     assert s.conversations_path is None and s.store_result_rows is False
+
+
+def test_the_default_model_must_be_one_the_picker_offers():
+    assert load_settings({"SQL_AGENT_MODEL": "claude-sonnet-5-5"}).model == "claude-sonnet-5-5"
+    with pytest.raises(ConfigError, match="SQL_AGENT_MODEL"):
+        load_settings({"SQL_AGENT_MODEL": "claude-2"})

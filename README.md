@@ -15,7 +15,8 @@ patients, so no real patient data is involved.
 
 ## How it works
 
-1. **Plan.** The agent, Claude Opus 5 through LangChain, works out what the question means.
+1. **Plan.** The agent, Claude through LangChain (Opus 5 by default, or another model
+   chosen for the question), works out what the question means.
    It uses shared definitions, such as which diagnosis codes make a patient diabetic,
    rather than inventing one for each question.
 2. **Query.** It writes one read-only SELECT at a time. Three independent layers make sure
@@ -34,7 +35,13 @@ that opens with no network.
 
 Follow-up questions build on the conversation, each step appears live while the agent
 works, and the answer appears as a draft while it is written. Conversations are stored, so
-an earlier one can be reopened from the sidebar and continued.
+an earlier one can be reopened from the sidebar, searched, pinned and continued. A question
+can be stopped while it is being answered.
+
+People sign in with an account, by password or with Google, and see only their own
+conversations. In the question box they choose the model (Opus 5, Opus 5.5, Sonnet 5.5,
+Sonnet 5 or Haiku 5.5) and how hard it thinks. Admins also get a console that runs the
+project's checks from the browser, shows usage and cost, and manages accounts.
 
 ## Repository layout
 
@@ -55,12 +62,13 @@ cd Backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp .env.example .env                          # then paste ANTHROPIC_API_KEY into .env
 .venv/bin/python -m sql_agent.load_data
+.venv/bin/python -m sql_agent.users create you@example.org --admin --claim-unowned
 .venv/bin/python -m sql_agent.serve           # http://127.0.0.1:8000, API docs at /docs
 
 # The interface, in a second terminal
 cd Frontend
 npm install
-npm start                                     # open http://localhost:4200
+npm start                                     # open http://localhost:4200 and sign in
 ```
 
 Prefer the terminal? From `Backend/`:
@@ -73,10 +81,10 @@ Prefer the terminal? From `Backend/`:
 
 | Check | Command, run from `Backend/` unless noted | Current result |
 |---|---|---|
-| Backend tests, no network | `.venv/bin/python -m pytest -q` | 375 passed |
+| Backend tests, no network | `.venv/bin/python -m pytest -q` | 522 passed, 3 skipped |
 | Attack catalogue | `.venv/bin/python -m sql_agent.check_security` | 78 of 78 as expected |
-| Evaluation against hand-verified answers | `.venv/bin/python -m sql_agent.evaluate` | 23 of 23 |
-| Interface tests, from `Frontend/` | `npm test -- --watch=false` | 108 passed |
+| Evaluation against hand-verified answers | `.venv/bin/python -m sql_agent.evaluate` | 23 of 23 on Opus 5; other models not yet scored |
+| Interface tests, from `Frontend/` | `npm test -- --watch=false` | 188 passed |
 
 The evaluation calls the model and costs money. Add `--dry-run` to check only the known
 answers against the data, for free.
@@ -90,8 +98,9 @@ answers against the data, for free.
 | v2.0.0 | The web interface: chat, live steps, transparency panels, result tables, CSV and JSON downloads |
 | v2.1.0 | Stored conversations with a sidebar to reopen, rename and delete them, and answers streamed as they are written |
 | v3.0.0 | Analytics tools, charts drawn from the run, and self-contained HTML reports |
+| v4.0.0 | A redesigned interface with themes, a model and effort picker, accounts with Google sign-in, and an admin console |
 
-Still to come: choosing the model and effort in the interface, a PostgreSQL design, and
+Still to come: scoring the other models on the evaluation, a PostgreSQL design, and
 deployment.
 
 ## Before using real data

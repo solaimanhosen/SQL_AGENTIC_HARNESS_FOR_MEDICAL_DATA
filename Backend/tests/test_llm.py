@@ -27,3 +27,28 @@ def test_refusal_fallback_can_be_disabled():
     p = _request_payload({"SQL_AGENT_REFUSAL_FALLBACK": "false"})
     assert "fallbacks" not in p
     assert not p.get("betas")
+
+
+def test_every_catalog_model_thinks_adaptively_at_the_chosen_effort():
+    from sql_agent.models import CATALOG
+
+    settings = load_settings({})
+    for option in CATALOG:
+        payload = build_chat_model(settings, model=option.id, effort="low")._get_request_payload([HumanMessage("hi")])
+        assert payload["model"] == option.id
+        assert payload["output_config"] == {"effort": "low"}
+        # Set by us, not left to langchain-anthropic, which has no profile for some models.
+        assert payload["thinking"] == {"type": "adaptive", "display": "summarized"}
+        assert not {"temperature", "top_p", "top_k"} & payload.keys()
+        assert ("fallbacks" in payload) == option.refusal_fallback
+
+
+def test_native_structured_output_reaches_models_langchain_has_no_profile_for():
+    from langchain.agents.structured_output import ProviderStrategy
+
+    from sql_agent.answer import StructuredAnswer
+
+    model = build_chat_model(load_settings({}), model="claude-haiku-5-5")
+    bound = model.bind_tools([], **ProviderStrategy(StructuredAnswer).to_model_kwargs())
+    payload = model._get_request_payload([HumanMessage("hi")], **bound.kwargs)
+    assert payload["output_config"]["format"]["type"] == "json_schema"

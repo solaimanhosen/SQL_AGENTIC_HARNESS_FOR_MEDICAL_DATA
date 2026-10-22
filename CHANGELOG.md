@@ -1,7 +1,127 @@
 # Changelog
 
 Notable changes to this project, newest first. Versions follow the project milestones:
-v1 is the backend, v2 adds the web interface, v3 adds analytics, charts and reports.
+v1 is the backend, v2 adds the web interface, v3 adds analytics, charts and reports, and
+v4 adds the model picker, accounts, the admin console and a redesigned interface.
+
+## v4.0.0 — 22 October 2026
+
+The interface is redesigned. People choose the model and effort for each question, sign in
+with an account or Google and see only their own conversations, and admins get a console
+for checks, monitoring and accounts. The record is `Documents/platform-and-accounts.md`, and
+the decisions are ADRs 0005 to 0008.
+
+### Removed
+
+- The shared access token (`SQL_AGENT_API_TOKEN`) and the page that asked for it. Accounts
+  replace them.
+
+### Added
+
+- A design system in `styles.css`: spacing, type, radius, shadow and motion tokens, and
+  colours for a light and a dark theme. Every component uses them.
+- A theme menu in the header: System, Light or Dark, remembered in this browser and applied
+  before the page first paints.
+- The Inter typeface, self-hosted, and Lucide icons. Angular CDK for menus.
+- Conversation addresses `/c/<id>`, with back and forward between conversations. Old
+  `/#<id>` links still open.
+- A new sidebar.
+  - It collapses to a rail of icons, and its toggle stays at the same top-left spot
+    whether it is open, collapsed or a phone drawer.
+  - It has Pinned, Recents (the five most recently used) and All chats (the rest, grouped by
+    month), each collapsible and remembered.
+  - A "⋯" menu on every row pins, renames or deletes. Deleting asks in a dialog.
+- Searching conversations. The box sits in the sidebar, and Ctrl or ⌘K opens it from
+  anywhere. It looks in titles and in every question, through `GET /api/conversations?q=`.
+- Pinning: `PATCH /api/conversations/{id}` takes `{"pinned": true}` as well as a title.
+  Pinned conversations are evicted last.
+- Choosing the model and effort for each question.
+  - Two menus in the question box offer Opus 5 (the default), Opus 5.5, Sonnet 5.5,
+    Sonnet 5 and Haiku 5.5, each with its price and whether it has been evaluated, and the
+    five effort levels.
+  - The choice can change between questions. A reopened conversation continues on its
+    latest answer's model, and every answer shows the model and effort it came from.
+  - Fable 5.1 is in the catalog for admins, once accounts exist.
+- `GET /api/models`, and `model` and `effort` on `/api/ask` and `/api/ask/stream`. The
+  service refuses anything not in `sql_agent/models.py` with a 422.
+- `effort` on stored answers and in the run log, and `last_model` and `last_effort` on
+  conversations, which is schema version 3.
+- `evaluate --model --effort` to score any model, with the estimated cost in the report.
+- `check_setup` compares the catalog with the live Models API, and `--all-models` makes one
+  small call to each model.
+- Accounts (ADR 0006).
+  - Sign up and sign in with email and password, or with Google (ADR 0007).
+  - Each person sees only their own conversations. Another person's conversation answers
+    404.
+  - Two roles, user and admin. Only admins may pick Fable 5.1.
+  - Sessions are HttpOnly, SameSite=Strict cookies with only their hash stored, ending after
+    30 idle or 90 days, on sign-out, or when the account is disabled.
+  - Requests that change something must carry `X-Requested-With: sql-agent`.
+  - Failed sign-ins are throttled.
+  - Each person has a daily token budget.
+- `python -m sql_agent.users` to create accounts and admins, list them, change roles, disable
+  them, reset passwords, and open or close registration. `--claim-unowned` gives the
+  conversations from before accounts to the first admin.
+- Sign-in and sign-up pages, a guard that sends a signed-out person to them and back, and an
+  avatar menu with Sign out.
+- Account routes: `/api/auth/*` and `/api/account/*` (profile, default model, password,
+  sessions).
+- An account page at `/account`, opened from the avatar menu:
+  - **Profile:** your name.
+  - **Security:**
+    - change your password, or set a first one on a Google-only account;
+    - connect or disconnect Google;
+    - see every signed-in browser and device, and sign them out one by one or all at once.
+  - **Preferences:** the default model and effort new chats start on, and the theme.
+  - **Usage:** today's tokens against your daily budget, and this month's questions, tokens
+    and estimated cost by model.
+- `GET /api/account/usage`.
+- A new chat starts on your default model. A person's daily budget is rebuilt from the
+  stored answers, so a restart no longer resets it.
+- Stop: while an answer is written, the send button becomes Stop. The service ends the run
+  at its next step and saves nothing for it (`POST /api/conversations/{id}/stop`).
+- The question box grows with its text. Loading placeholders replace empty lists, failures
+  that happen out of sight show as toasts, each question is a heading, and a finished answer
+  is announced to screen readers.
+- The admin console at `/admin`, for admins, from the avatar menu:
+  - **Overview:** status tiles, today's budget and the latest checks.
+  - **Checks:** a card per check with its cost, a confirmation before any paid one, live
+    output, failing test names, cancel and history.
+  - **Monitoring:** daily charts of requests, response times, questions and cost, and
+    tables by model, by person and refusal reason.
+  - **People:** roles, disabling, and a temporary password shown once.
+  - **Settings:** the registration switch.
+- The admin console's service (ADR 0008):
+  - **Overview:** status, accounts, budgets, and the latest checks.
+  - **Metrics:** read from the request and run logs.
+  - **Checks:** seven fixed jobs (unit tests, security catalogue, semantic layer, dry-run
+    and live evaluation, setup, ping every model), one at a time, with live output and
+    history.
+  - **People:** account management, including temporary passwords.
+  - **Settings:** the registration switch.
+- Schema version 5: `check_runs`. `SQL_AGENT_ADMIN_LIVE_EVAL` allows the paid live
+  evaluation from the console.
+- Schema version 4: users, sessions, pending Google sign-ins and settings in the application
+  database, now opened by `appdb.py`.
+- Schema versions for `data/conversations.db`. A v3 file upgrades in place when opened, and a
+  file from a newer version is refused untouched.
+
+### Changed
+
+- The conversation column is 60rem wide instead of 52rem, with prose kept to a readable
+  line length. The header and the question box span the whole pane.
+- The question box is a single card with a send button, and the example questions are
+  cards.
+- The header shows the open conversation's title and a status dot. The model moved from
+  the header to the question box, since it can now change between questions.
+- Every model runs with adaptive thinking, an explicit effort and the API's native
+  structured output, set by us rather than left to langchain-anthropic, which has no
+  profile for Sonnet 5.5 or Haiku 5.5.
+- The phone drawer moves focus inside when it opens, keeps it there, and closes with Escape,
+  returning focus to the button that opened it.
+- When the service cannot be reached, the message no longer tells users to run a command.
+- The initial bundle's warning budget is 600 kB instead of 500 kB: the router, CDK menus and
+  dialogs bring it to about 505 kB, 112 kB transferred. The error limit stays at 1 MB.
 
 ## v3.0.0 — 21 October 2026
 

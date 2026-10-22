@@ -65,9 +65,8 @@ describe('AgentApi', () => {
     expect(JSON.parse(init.body as string)).toEqual({ question: 'How many?' });
   });
 
-  it('sends the conversation id with a follow-up, and the token once one is set', async () => {
+  it('sends the conversation id with a follow-up, with the application header', async () => {
     const { api, fetchSpy } = setup(async () => streamResponse([sse('answer', answer)]));
-    api.token.set('secret-token');
 
     await collect(api.askStream('And heart disease?', 'a'.repeat(32)));
 
@@ -76,13 +75,64 @@ describe('AgentApi', () => {
       question: 'And heart disease?',
       conversation_id: 'a'.repeat(32),
     });
-    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer secret-token');
+    expect(new Headers(init.headers).get('X-Requested-With')).toBe('sql-agent');
+    expect(init.credentials).toBe('same-origin');
   });
 
-  it('sends no Authorization header without a token', async () => {
+  it('sends the chosen model and effort with the question', async () => {
+    const { api, fetchSpy } = setup(async () => streamResponse([sse('answer', answer)]));
+    await collect(
+      api.askStream('q', null, undefined, { model: 'claude-haiku-5-5', effort: 'low' }),
+    );
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body as string)).toEqual({
+      question: 'q',
+      model: 'claude-haiku-5-5',
+      effort: 'low',
+    });
+  });
+
+  it('reads the models on offer', async () => {
+    const catalog = { default_model: 'claude-opus-5', default_effort: 'high', models: [] };
+    const { api, fetchSpy } = setup(async () => jsonResponse(catalog, 200));
+    expect(await api.models()).toEqual(catalog);
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/models');
+  });
+
+  it('never sends a bearer token: the session is a cookie the page cannot read', async () => {
     const { api, fetchSpy } = setup(async () => streamResponse([sse('answer', answer)]));
     await collect(api.askStream('q', null));
     expect(new Headers(fetchSpy.mock.calls[0][1].headers).has('Authorization')).toBe(false);
+  });
+
+  it('counts an ended session, but not a wrong password', async () => {
+    const { api } = setup(async () =>
+      jsonResponse({ error: 'unauthenticated', message: 'Sign in to continue.' }, 401),
+    );
+    await expect(api.conversations()).rejects.toMatchObject({ status: 401 });
+    expect(api.signedOut()).toBe(1);
+    await expect(api.login('ann@example.org', 'wrong')).rejects.toMatchObject({ status: 401 });
+    await expect(api.me()).rejects.toMatchObject({ status: 401 });
+    expect(api.signedOut()).toBe(1);
+  });
+
+  it('signs in, registers and signs out', async () => {
+    const user = { id: 'u1', email: 'ann@example.org' };
+    const { api, fetchSpy } = setup(async (url) =>
+      url.endsWith('/logout') ? new Response(null, { status: 204 }) : jsonResponse(user, 200),
+    );
+    expect(await api.login('ann@example.org', 'pw')).toEqual(user);
+    expect(await api.register('ann@example.org', 'pw', 'Ann')).toEqual(user);
+    await api.logout();
+    const calls = fetchSpy.mock.calls.map(([url, init]) => [init.method, url, init.body]);
+    expect(calls).toEqual([
+      ['POST', '/api/auth/login', JSON.stringify({ email: 'ann@example.org', password: 'pw' })],
+      [
+        'POST',
+        '/api/auth/register',
+        JSON.stringify({ email: 'ann@example.org', password: 'pw', name: 'Ann' }),
+      ],
+      ['POST', '/api/auth/logout', undefined],
+    ]);
   });
 
   it('turns an error event in the stream into an ApiError', async () => {
@@ -134,19 +184,19 @@ describe('AgentApi', () => {
     await expect(collect(api.askStream('q', null))).rejects.toMatchObject({ kind: 'stream_ended' });
   });
 
-  it('lists, opens, renames and deletes conversations, with the token', async () => {
+  it('lists, searches, opens, renames, pins and deletes conversations', async () => {
     const id = 'c'.repeat(32);
     const { api, fetchSpy } = setup(async (url, init) =>
       init.method === 'DELETE'
         ? new Response(null, { status: 204 })
         : jsonResponse(url.endsWith('/conversations') ? [{ id }] : { id, title: 'Renamed' }, 200),
     );
-    api.token.set('the-shared-token');
-
     expect(await api.conversations()).toEqual([{ id }]);
     expect(await api.conversation(id)).toEqual({ id, title: 'Renamed' });
-    expect((await api.renameConversation(id, 'Renamed')).title).toBe('Renamed');
+    expect((await api.updateConversation(id, { title: 'Renamed' })).title).toBe('Renamed');
     await api.deleteConversation(id);
+    await api.updateConversation(id, { pinned: true });
+    await api.conversations('  heart & lung? ');
 
     const calls = fetchSpy.mock.calls.map(([url, init]) => [init.method, url]);
     expect(calls).toEqual([
@@ -154,10 +204,13 @@ describe('AgentApi', () => {
       ['GET', `/api/conversations/${id}`],
       ['PATCH', `/api/conversations/${id}`],
       ['DELETE', `/api/conversations/${id}`],
+      ['PATCH', `/api/conversations/${id}`],
+      ['GET', '/api/conversations?q=heart%20%26%20lung%3F'],
     ]);
     expect(fetchSpy.mock.calls[2][1].body).toBe(JSON.stringify({ title: 'Renamed' }));
+    expect(fetchSpy.mock.calls[4][1].body).toBe(JSON.stringify({ pinned: true }));
     for (const [, init] of fetchSpy.mock.calls) {
-      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer the-shared-token');
+      expect(new Headers(init.headers).get('X-Requested-With')).toBe('sql-agent');
     }
   });
 
@@ -171,7 +224,7 @@ describe('AgentApi', () => {
     });
   });
 
-  it('fetches a report as text, with the token', async () => {
+  it('fetches a report as text', async () => {
     const id = 'c'.repeat(32);
     const { api, fetchSpy } = setup(
       async () =>
@@ -180,11 +233,9 @@ describe('AgentApi', () => {
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
         }),
     );
-    api.token.set('the-shared-token');
     expect(await api.report(id, 2)).toBe('<!doctype html><title>r</title>');
     const [url, init] = fetchSpy.mock.calls[0];
     expect([init.method, url]).toEqual(['GET', `/api/conversations/${id}/turns/2/report`]);
-    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer the-shared-token');
   });
 
   it('reports why a report was refused', async () => {

@@ -14,17 +14,17 @@
                 @if (ran(number)) {
                   <button
                     type="button"
-                    class="cite"
+                    class="chip cite"
                     title="Show the SQL for this query"
                     (click)="showQuery(number)"
                   >
                     Query {{ number }}
                   </button>
                 } @else {
-                  <span class="cite uncited">Query {{ number }} did not run</span>
+                  <span class="chip cite uncited">Query {{ number }} did not run</span>
                 }
               } @empty {
-                <span class="cite uncited">No query cited</span>
+                <span class="chip cite uncited">No query cited</span>
               }
             </li>
           }

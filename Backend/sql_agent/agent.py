@@ -15,6 +15,7 @@ from typing import Callable
 
 import anthropic
 from langchain.agents import create_agent
+from langchain.agents.structured_output import ProviderStrategy
 from langgraph.errors import GraphRecursionError
 
 from .answer import AnswerIssues, Draft, StructuredAnswer, check_answer, draft_from_partial, render_answer
@@ -41,12 +42,18 @@ class AgentError(RuntimeError):
     """The agent could not produce an answer."""
 
 
+class AgentStopped(AgentError):
+    """The person stopped the question before the answer was finished."""
+
+
 def describe_failure(exc: BaseException) -> tuple[str, str] | None:
     """A kind and a message for a failure worth explaining, or None for anything else.
 
     The command line and the HTTP service both use this, so a failure reads the same in
     each. The kinds are agent, auth, api and connection.
     """
+    if isinstance(exc, AgentStopped):
+        return "stopped", str(exc)
     if isinstance(exc, AgentError):
         return "agent", str(exc)
     if isinstance(exc, anthropic.AuthenticationError):
@@ -92,6 +99,8 @@ class AgentResult:
     """The earlier turns the agent was shown, oldest first."""
     charts: tuple[Chart, ...] = ()
     """The charts asked for that could be drawn, with values read from the run."""
+    effort: str | None = None
+    """The effort the model ran at."""
 
     @property
     def successful_queries(self) -> tuple[QueryRecord, ...]:
@@ -129,6 +138,9 @@ class SqlAgent:
         history: Sequence[Turn] = (),
         on_event: Callable[[str, str], None] | None = None,
         on_draft: Callable[[Draft], None] | None = None,
+        model: str | None = None,
+        effort: str | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> AgentResult:
         """Answer one question, recording every query that ran along the way.
 
@@ -136,6 +148,13 @@ class SqlAgent:
         about heart disease?" can be understood. Only the most recent turns are kept.
         `on_draft` is called with the answer's text as the model writes it, before it has
         been checked. The returned result is the only checked answer.
+
+        `model` and `effort` choose the model for this question; left out, the settings'
+        defaults are used. Callers check them against the catalog first.
+
+        `should_stop` is asked at every step and every piece of streamed text. Once it says
+        yes, the run ends with AgentStopped, which closes the model's stream, so nothing more
+        is generated or paid for.
         """
         question = (question or "").strip()
         if not question:
@@ -145,11 +164,16 @@ class SqlAgent:
         messages.append({"role": "user", "content": question})
 
         toolbox = ToolBox(db=self.db, layer=self.layer, as_of=self.as_of, on_event=on_event)
+        model = model or self.settings.model
+        effort = effort or self.settings.effort
         agent = create_agent(
-            build_chat_model(self.settings),
+            build_chat_model(self.settings, model=model, effort=effort),
             toolbox.tools(),
             system_prompt=self.system_prompt,
-            response_format=StructuredAnswer,
+            # Always the API's native structured output, never a tool call standing in for
+            # it: the draft is read from the answer's JSON as it streams, and LangChain would
+            # otherwise fall back to a tool for models it has no profile for.
+            response_format=ProviderStrategy(StructuredAnswer),
         )
 
         started = time.perf_counter()
@@ -163,6 +187,8 @@ class SqlAgent:
                 config={"recursion_limit": self.max_steps},
                 stream_mode=["messages", "values"],
             ):
+                if should_stop is not None and should_stop():
+                    raise AgentStopped("Stopped before the answer was finished. Nothing was saved for this question.")
                 if mode == "values":
                     state = payload
                 else:
@@ -196,7 +222,8 @@ class SqlAgent:
             issues=issues,
             queries=queries,
             as_of=self.as_of,
-            model=self.settings.model,
+            model=model,
+            effort=effort,
             elapsed_s=time.perf_counter() - started,
             input_tokens=input_tokens,
             output_tokens=output_tokens,

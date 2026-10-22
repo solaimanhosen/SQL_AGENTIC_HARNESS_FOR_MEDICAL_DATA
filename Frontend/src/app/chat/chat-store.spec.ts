@@ -2,21 +2,43 @@ import { TestBed } from '@angular/core/testing';
 
 import { AgentApi, ApiError } from '../api/agent-api';
 import { ConversationDetail, ConversationSummary, StreamEvent } from '../api/types';
-import { answerFixture, conversationFixture, summaryFixture } from '../testing/fixtures';
+import {
+  answerFixture,
+  catalogFixture,
+  conversationFixture,
+  summaryFixture,
+} from '../testing/fixtures';
+import { Toasts } from '../ui/toasts';
 import { ChatStore, MAX_QUESTION_CHARS } from './chat-store';
 
-type Script = (question: string, conversationId: string | null) => AsyncGenerator<StreamEvent>;
+type Script = (
+  question: string,
+  conversationId: string | null,
+  signal?: AbortSignal,
+) => AsyncGenerator<StreamEvent>;
 
 function setup(script: Script) {
   const calls: { question: string; conversationId: string | null }[] = [];
   const api = {
-    askStream: (question: string, conversationId: string | null) => {
+    askStream: (question: string, conversationId: string | null, signal?: AbortSignal) => {
       calls.push({ question, conversationId });
-      return script(question, conversationId);
+      return script(question, conversationId, signal);
     },
-    conversations: vi.fn(async (): Promise<ConversationSummary[]> => [summaryFixture()]),
+    stopQuestion: vi.fn(async (_id: string) => undefined),
+    conversations: vi.fn(async (_search?: string): Promise<ConversationSummary[]> => [
+      summaryFixture(),
+    ]),
     conversation: vi.fn(async (_id: string): Promise<ConversationDetail> => conversationFixture()),
-    renameConversation: vi.fn(async (id: string, title: string) => summaryFixture({ id, title })),
+    updateConversation: vi.fn(async (id: string, changes: { title?: string; pinned?: boolean }) =>
+      summaryFixture({
+        id,
+        ...(changes.title ? { title: changes.title } : {}),
+        ...(changes.pinned !== undefined
+          ? { pinned_at: changes.pinned ? '2026-10-21T12:00:00Z' : null }
+          : {}),
+      }),
+    ),
+    models: vi.fn(async () => catalogFixture()),
     deleteConversation: vi.fn(async (_id: string) => undefined),
   };
   TestBed.configureTestingModule({ providers: [{ provide: AgentApi, useValue: api }] });
@@ -103,22 +125,19 @@ describe('ChatStore', () => {
     expect(store.exchanges()).toEqual([]);
   });
 
-  it('asks for the token when the service refuses without it, then retries', async () => {
+  it('marks a question refused for an ended session as failed, to ask again after signing in', async () => {
     let attempts = 0;
     const { store } = setup(async function* (question, conversationId) {
       attempts += 1;
       if (attempts === 1) {
-        throw new ApiError(401, 'unauthorized', 'Send the service token.');
+        throw new ApiError(401, 'unauthenticated', 'Sign in to continue.');
       }
       yield* answered(question, conversationId);
     });
 
     await store.ask('How many?');
-    expect(store.needsToken()).toBe(true);
     expect(store.exchanges()[0].status).toBe('failed');
-
     await store.retry(store.lastFailed()!.id);
-    expect(store.needsToken()).toBe(false);
     expect(store.exchanges()[0].status).toBe('answered');
   });
 
@@ -194,8 +213,149 @@ describe('ChatStore', () => {
     const { store, api } = setup(answered);
     await store.refreshConversations();
     await store.rename('c'.repeat(32), 'Diabetes counts');
-    expect(api.renameConversation).toHaveBeenCalledWith('c'.repeat(32), 'Diabetes counts');
+    expect(api.updateConversation).toHaveBeenCalledWith('c'.repeat(32), {
+      title: 'Diabetes counts',
+    });
     expect(store.conversations()[0].title).toBe('Diabetes counts');
+  });
+
+  it('starts on the default model, and accepts only choices the service offers', async () => {
+    const { store } = setup(answered);
+    await store.loadModels();
+    expect(store.choice()).toEqual({ model: 'claude-opus-5', effort: 'high' });
+
+    store.choose({ model: 'claude-haiku-5-5', effort: 'low' });
+    expect(store.choice()).toEqual({ model: 'claude-haiku-5-5', effort: 'low' });
+    store.choose({ model: 'claude-haiku-5-5', effort: 'max' }); // Haiku here offers up to high
+    store.choose({ model: 'claude-fable-5-1', effort: 'high' }); // not offered at all
+    expect(store.choice()).toEqual({ model: 'claude-haiku-5-5', effort: 'low' });
+  });
+
+  it('starts a new chat on the default model, after a question on another', async () => {
+    const { store } = setup(answered);
+    await store.loadModels();
+    store.choose({ model: 'claude-haiku-5-5', effort: 'low' });
+    await store.ask('How many?');
+    store.newConversation();
+    expect(store.choice()).toEqual({ model: 'claude-opus-5', effort: 'high' });
+  });
+
+  it('stops a question on the service, which ends the stream as stopped', async () => {
+    let release!: () => void;
+    const { store, api } = setup(async function* () {
+      yield { type: 'conversation', conversationId: 'c'.repeat(32), turn: 1 };
+      await new Promise<void>((resolve) => (release = resolve));
+      throw new ApiError(409, 'stopped', 'Stopped before the answer was finished.');
+    });
+    const asking = store.ask('How many?');
+    await vi.waitFor(() => expect(store.conversationId()).toBe('c'.repeat(32)));
+
+    const stopping = store.stop();
+    expect(store.stopping()).toBe(true);
+    await stopping;
+    expect(api.stopQuestion).toHaveBeenCalledWith('c'.repeat(32));
+    release();
+    await asking;
+    expect(store.exchanges()[0].status).toBe('failed');
+    expect(store.exchanges()[0].error?.kind).toBe('stopped');
+    expect(store.stopping()).toBe(false);
+  });
+
+  it('closes the stream when stopped before the service has named the conversation', async () => {
+    const { store, api } = setup(async function* (_q, _c, signal) {
+      await new Promise<void>((_resolve, reject) =>
+        signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))),
+      );
+    });
+    const asking = store.ask('How many?');
+    await store.stop();
+    await asking;
+    expect(api.stopQuestion).not.toHaveBeenCalled();
+    expect(store.exchanges()[0].error?.kind).toBe('stopped');
+    expect(store.exchanges()[0].error?.message).toBe(
+      'Stopped. Nothing was saved for this question.',
+    );
+  });
+
+  it('says so in a toast when a rename cannot be saved', async () => {
+    const { store, api } = setup(answered);
+    await store.refreshConversations();
+    api.updateConversation.mockRejectedValue(new ApiError(0, 'unreachable', 'Down.'));
+    await store.rename('c'.repeat(32), 'New title');
+    expect(
+      TestBed.inject(Toasts)
+        .items()
+        .map((item) => item.message),
+    ).toEqual(['The new title could not be saved.']);
+  });
+
+  it('marks the list as loaded once it has been asked for, even if that failed', async () => {
+    const { store, api } = setup(answered);
+    api.conversations.mockRejectedValue(new ApiError(0, 'unreachable', 'Down.'));
+    expect(store.listLoaded()).toBe(false);
+    await store.refreshConversations();
+    expect(store.listLoaded()).toBe(true);
+  });
+
+  it('sends the choice with the question', async () => {
+    const { store, api } = setup(answered);
+    const asked = vi.spyOn(api, 'askStream');
+    await store.loadModels();
+    store.choose({ model: 'claude-haiku-5-5', effort: 'medium' });
+    await store.ask('How many?');
+    expect(asked).toHaveBeenCalledWith('How many?', null, expect.any(AbortSignal), {
+      model: 'claude-haiku-5-5',
+      effort: 'medium',
+    });
+  });
+
+  it('keeps the current choice when the catalog cannot be read, so the service default applies', async () => {
+    const { store, api } = setup(answered);
+    api.models.mockRejectedValue(new ApiError(0, 'unreachable', 'Down.'));
+    await store.loadModels();
+    expect(store.catalog()).toBeNull();
+    expect(store.choice()).toBeNull();
+  });
+
+  it('pins and unpins a conversation in the list and in search results', async () => {
+    const { store, api } = setup(answered);
+    await store.refreshConversations();
+    await store.search('diabetes');
+    await store.pin('c'.repeat(32), true);
+    expect(api.updateConversation).toHaveBeenCalledWith('c'.repeat(32), { pinned: true });
+    expect(store.conversations()[0].pinned_at).toBe('2026-10-21T12:00:00Z');
+    expect(store.searchResults()![0].pinned_at).toBe('2026-10-21T12:00:00Z');
+
+    await store.pin('c'.repeat(32), false);
+    expect(store.conversations()[0].pinned_at).toBeNull();
+  });
+
+  it('searches on the service, and keeps only the newest search when answers cross', async () => {
+    const { store, api } = setup(answered);
+    let releaseSlow!: () => void;
+    api.conversations.mockImplementation(async (text?: string) => {
+      if (text === 'slow') {
+        await new Promise<void>((resolve) => (releaseSlow = resolve));
+        return [summaryFixture({ title: 'stale' })];
+      }
+      return text ? [summaryFixture({ title: 'fresh' })] : [summaryFixture()];
+    });
+
+    const slow = store.search('slow');
+    await store.search('fresh');
+    releaseSlow();
+    await slow;
+    expect(store.searchResults()!.map((item) => item.title)).toEqual(['fresh']);
+
+    await store.search('   ');
+    expect(store.searchResults()).toBeNull();
+  });
+
+  it('shows no results, not an error, when a search fails', async () => {
+    const { store, api } = setup(answered);
+    api.conversations.mockRejectedValue(new ApiError(0, 'unreachable', 'Down.'));
+    await store.search('diabetes');
+    expect(store.searchResults()).toEqual([]);
   });
 
   it('deletes a conversation, and clears the screen when it is the one shown', async () => {

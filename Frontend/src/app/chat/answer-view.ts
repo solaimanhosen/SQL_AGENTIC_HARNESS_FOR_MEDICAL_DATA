@@ -64,7 +64,7 @@ export class AnswerView {
       `${ran} ${ran === 1 ? 'query' : 'queries'}` + (failed ? `, ${failed} failed` : ''),
       `${answer.elapsed_s}s`,
       `${count(answer.input_tokens)} in and ${count(answer.output_tokens)} out tokens`,
-      answer.model,
+      answer.effort ? `${answer.model} at ${answer.effort} effort` : answer.model,
     ].join(' · ');
   });
 

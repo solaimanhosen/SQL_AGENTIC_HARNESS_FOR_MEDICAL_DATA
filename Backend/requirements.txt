@@ -23,6 +23,8 @@ SQLAlchemy>=2.0,<3
 # The HTTP service the web interface calls
 fastapi>=0.141,<1
 uvicorn>=0.54,<1
+# Google sign-in's token exchange (Documents/decisions/0007). Already installed with anthropic.
+httpx>=0.28,<1
 
 # Testing
 pytest>=9,<10

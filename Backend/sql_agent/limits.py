@@ -4,6 +4,7 @@ Three limits apply before a question reaches the model:
 
 - a number of questions answered at once, beyond which new ones are refused, not queued;
 - a token budget per UTC day for the whole service, the real ceiling on cost;
+- a token budget per person per UTC day, so one account cannot use up everyone's day;
 - a token budget per conversation, so one long conversation cannot use up the day.
 
 A question's cost is only known when it finishes, and a run keeps going even if the browser
@@ -47,6 +48,7 @@ class Reservation:
     conversation_id: str
     tokens: int
     day: date
+    user_id: str | None = None
 
 
 class SpendingLimits:
@@ -58,12 +60,14 @@ class SpendingLimits:
         max_concurrent_runs: int,
         daily_token_budget: int,
         conversation_token_budget: int,
+        user_daily_token_budget: int | None = None,
         reserve_tokens: int = RUN_RESERVE_TOKENS,
         today: Callable[[], date] = lambda: datetime.now(timezone.utc).date(),
     ) -> None:
         self.max_concurrent_runs = max_concurrent_runs
         self.daily_token_budget = daily_token_budget
         self.conversation_token_budget = conversation_token_budget
+        self.user_daily_token_budget = user_daily_token_budget
         self.reserve_tokens = reserve_tokens
         self._today = today
         self._lock = threading.Lock()
@@ -73,6 +77,8 @@ class SpendingLimits:
         self._running = 0
         self._conversations: OrderedDict[str, int] = OrderedDict()
         """Tokens spent or reserved by each conversation."""
+        self._users: dict[str, int] = {}
+        """Tokens spent or reserved today by each person."""
 
     @classmethod
     def from_settings(cls, settings) -> "SpendingLimits":
@@ -80,13 +86,22 @@ class SpendingLimits:
             max_concurrent_runs=settings.max_concurrent_runs,
             daily_token_budget=settings.daily_token_budget,
             conversation_token_budget=settings.conversation_token_budget,
+            user_daily_token_budget=settings.user_daily_token_budget,
         )
 
-    def reserve(self, conversation_id: str, *, already_spent: int = 0) -> Reservation:
+    def reserve(
+        self,
+        conversation_id: str,
+        *,
+        already_spent: int = 0,
+        user_id: str | None = None,
+        user_spent_today: int = 0,
+    ) -> Reservation:
         """Claim room for one run, or raise LimitExceeded. Every reservation must be settled.
 
         `already_spent` is what the conversation's stored turns used. It is the starting
         point for a conversation this ledger has not seen, such as one from before a restart.
+        `user_spent_today` does the same for a person: what their stored answers used today.
         """
         with self._lock:
             self._roll_over()
@@ -98,18 +113,31 @@ class SpendingLimits:
                 raise LimitExceeded(
                     "daily_budget", "The service has used its model budget for today. It resets at midnight UTC."
                 )
+            user_spent = self._users.get(user_id, user_spent_today) if user_id is not None else 0
+            if (
+                user_id is not None
+                and self.user_daily_token_budget is not None
+                and user_spent + self.reserve_tokens > self.user_daily_token_budget
+            ):
+                raise LimitExceeded(
+                    "user_budget", "You have used your model budget for today. It resets at midnight UTC."
+                )
             spent = self._conversations.get(conversation_id, already_spent)
             if spent + self.reserve_tokens > self.conversation_token_budget:
                 raise LimitExceeded(
                     "conversation_budget", "This conversation has used its model budget. Start a new conversation."
                 )
+            if user_id is not None:
+                self._users[user_id] = user_spent + self.reserve_tokens
             self._running += 1
             self._reserved_today += self.reserve_tokens
             self._conversations[conversation_id] = spent + self.reserve_tokens
             self._conversations.move_to_end(conversation_id)
             while len(self._conversations) > MAX_TRACKED_CONVERSATIONS:
                 self._conversations.popitem(last=False)
-            return Reservation(conversation_id=conversation_id, tokens=self.reserve_tokens, day=self._day)
+            return Reservation(
+                conversation_id=conversation_id, tokens=self.reserve_tokens, day=self._day, user_id=user_id
+            )
 
     def settle(self, reservation: Reservation, used_tokens: int | None) -> None:
         """Replace a reservation with what the run used, or keep it when that is unknown."""
@@ -119,9 +147,18 @@ class SpendingLimits:
             if reservation.day == self._day:
                 self._reserved_today -= reservation.tokens
                 self._spent_today += charged
+                if reservation.user_id in self._users:
+                    self._users[reservation.user_id] += charged - reservation.tokens
             if reservation.conversation_id in self._conversations:
                 self._conversations[reservation.conversation_id] += charged - reservation.tokens
             self._roll_over()
+
+    def user_spent_today(self, user_id: str, *, already_spent: int = 0) -> int:
+        """Tokens this person has spent or reserved today. `already_spent` is the stored figure,
+        used when this ledger has not seen them today, such as after a restart."""
+        with self._lock:
+            self._roll_over()
+            return self._users.get(user_id, already_spent)
 
     def usage(self) -> dict:
         with self._lock:
@@ -140,3 +177,4 @@ class SpendingLimits:
         if today != self._day:
             # Runs still going from yesterday settle against yesterday, which is gone.
             self._day, self._spent_today, self._reserved_today = today, 0, 0
+            self._users.clear()

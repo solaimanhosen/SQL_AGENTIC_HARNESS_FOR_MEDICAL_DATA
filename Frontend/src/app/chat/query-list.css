@@ -1,9 +1,10 @@
 .query {
-  margin-top: 0.7rem;
-  border-radius: 0.4rem;
+  margin-top: var(--space-3);
+  border-radius: var(--radius-sm);
 }
 
-.query:focus {
+/* Focused from a citation, the highlight below shows where; from the keyboard, the ring. */
+.query:focus:not(:focus-visible) {
   outline: none;
 }
 
@@ -13,9 +14,9 @@
 }
 
 .head {
-  margin: 0 0 0.3rem;
+  margin: 0 0 var(--space-1);
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
 }
 
 .head strong {
@@ -28,29 +29,29 @@
 }
 
 .attempts {
-  margin-top: 0.9rem;
-  padding-top: 0.7rem;
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
   border-top: 1px dashed var(--border);
 }
 
 .error {
-  margin: 0.3rem 0 0;
-  font-size: 0.82rem;
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
 }
 
 .tools {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-top: 0.4rem;
+  gap: var(--space-1-5);
+  margin-top: var(--space-1-5);
 }
 
 .analysis {
-  margin: 0.4rem 0 0;
-  padding-left: 1.2rem;
-  font-size: 0.85rem;
+  margin: var(--space-1-5) 0 0;
+  padding-left: var(--space-5);
+  font-size: var(--text-sm);
 }
 
 .analysis li + li {
-  margin-top: 0.15rem;
+  margin-top: var(--space-0-5);
 }
