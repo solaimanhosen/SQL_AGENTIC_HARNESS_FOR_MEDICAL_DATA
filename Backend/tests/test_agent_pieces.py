@@ -250,3 +250,12 @@ def test_a_remark_before_a_tool_call_does_not_leak_into_the_draft(offline_agent)
     drafts = []
     offline_agent.answer("How many?", on_draft=drafts.append)
     assert drafts == [Draft(headline="Done.")]
+
+
+def test_a_run_told_to_stop_ends_at_its_next_step(offline_agent):
+    from sql_agent.agent import AgentStopped, describe_failure
+
+    with pytest.raises(AgentStopped) as stopped:
+        offline_agent.answer("How many?", should_stop=lambda: True)
+    assert describe_failure(stopped.value)[0] == "stopped"
+    assert offline_agent.answer("How many?", should_stop=lambda: False).structured is not None

@@ -128,6 +128,7 @@ for `localhost`; set it to `false` for plain HTTP on this machine.
 | GET | `/api/conversations/{id}` | One conversation: every question with its answer and steps as first sent, and whether it is still answering. |
 | GET | `/api/models` | The models a question may run on, in the picker's order, with prices, effort levels and evaluation status, and the default model and effort. |
 | PATCH | `/api/conversations/{id}` | Rename it with `{"title": "..."}` (1 to 100 characters), pin or unpin it with `{"pinned": true}`, or both. Neither counts as use. |
+| POST | `/api/conversations/{id}/stop` | Stop the question the conversation is answering. It ends at its next step, nothing is saved, and the question gets a 409 `stopped`. |
 | DELETE | `/api/conversations/{id}` | Delete it and its answers. A conversation still answering gets a 409. |
 | GET | `/api/conversations/{id}/turns/{turn}/report` | One stored answer as a self-contained HTML report, as a download. |
 

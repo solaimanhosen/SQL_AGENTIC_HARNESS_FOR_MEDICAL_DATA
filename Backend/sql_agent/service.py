@@ -25,8 +25,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Literal
 
@@ -76,7 +77,7 @@ logger = logging.getLogger(__name__)
 
 # What each kind of failure means to a caller. The agent could not answer the question as
 # asked, or the model provider failed, which is not the caller's fault.
-FAILURE_STATUS = {"agent": 422, "auth": 502, "api": 502, "connection": 503}
+FAILURE_STATUS = {"agent": 422, "stopped": 409, "auth": 502, "api": 502, "connection": 503}
 
 
 class AskRequest(BaseModel):
@@ -255,6 +256,8 @@ def create_app(
     jobs = JobRunner(conversations.database) if jobs is None else jobs
     # Streaming runs outlive their connection, so they are held here until they finish.
     background: set[asyncio.Task] = set()
+    # The question each conversation is answering, so Stop can reach it.
+    running: dict[str, _Claim] = {}
     app = FastAPI(
         title="SQL agent",
         summary="Questions about synthetic patient data, answered with traceable SQL.",
@@ -479,11 +482,25 @@ def create_app(
             ],
         )
 
+    @protected.post("/api/conversations/{conversation_id}/stop", status_code=202)
+    def stop_question(conversation_id: str = ConversationId, user: User = signed_in) -> dict:
+        """Stop the question this conversation is answering. Nothing is saved for it."""
+        conversations.get(conversation_id, owner=user.id)  # someone else's is unknown here
+        claim = running.get(conversation_id)
+        if claim is None:
+            return _error(409, "not_running", "This conversation is not answering a question.")
+        claim.stop.set()
+        return {"stopping": True}
+
     @protected.post("/api/ask")
     async def ask(request: AskRequest, user: User = signed_in) -> AnswerOut:
         choice = _choose(agent, request, user)
         claim = _claim(conversations, limits, request.conversation_id, user)
-        return await _run(agent, conversations, limits, claim, request.question, choice=choice)
+        running[claim.conversation_id] = claim
+        try:
+            return await _run(agent, conversations, limits, claim, request.question, choice=choice)
+        finally:
+            running.pop(claim.conversation_id, None)
 
     @protected.post(
         "/api/ask/stream",
@@ -496,7 +513,8 @@ def create_app(
         # arrives cannot leave the conversation claimed. The model choice is checked first.
         choice = _choose(agent, request, user)
         claim = _claim(conversations, limits, request.conversation_id, user)
-        events = _start(agent, conversations, limits, claim, request.question, background, choice)
+        running[claim.conversation_id] = claim
+        events = _start(agent, conversations, limits, claim, request.question, background, choice, running)
         return StreamingResponse(
             _relay(events, claim.conversation_id, claim.turn),
             media_type="text/event-stream",
@@ -603,6 +621,8 @@ class _Claim:
     turn: int
     reservation: Reservation
     user_id: str | None = None
+    stop: threading.Event = field(default_factory=threading.Event)
+    """Set when the person presses Stop; the agent ends at its next step."""
 
 
 def _claim(
@@ -666,6 +686,7 @@ async def _run(
             on_draft,
             choice,
             claim.user_id,
+            claim.stop.is_set,
         )
         answer = answer_payload(result, agent.layer, conversation_id=claim.conversation_id, turn=claim.turn)
         return answer
@@ -717,9 +738,16 @@ def _answer_and_log(
     on_draft: Callable[[Draft], None] | None,
     choice: _Choice,
     user_id: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> AgentResult:
     result = agent.answer(
-        question, history=history, on_event=on_event, on_draft=on_draft, model=choice.model, effort=choice.effort
+        question,
+        history=history,
+        on_event=on_event,
+        on_draft=on_draft,
+        model=choice.model,
+        effort=choice.effort,
+        should_stop=should_stop,
     )
     if agent.settings.log_path is not None:
         log_run(result, agent.settings.log_path, conversation_id=conversation_id, user_id=user_id)
@@ -734,6 +762,7 @@ def _start(
     question: str,
     background: set[asyncio.Task],
     choice: _Choice,
+    running: dict[str, "_Claim"] | None = None,
 ) -> asyncio.Queue[tuple[str, dict]]:
     """Run the question as its own task, returning the queue its events arrive on.
 
@@ -767,6 +796,9 @@ def _start(
         except Exception:
             logger.exception("Streaming question failed")
             events.put_nowait(("error", {"error": "internal", "message": "The service failed unexpectedly.", "status": 500}))
+        finally:
+            if running is not None:
+                running.pop(claim.conversation_id, None)
 
     task = asyncio.create_task(run())
     background.add(task)

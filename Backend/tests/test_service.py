@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import time
 from datetime import date
 
 import anthropic
@@ -8,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sql_agent.accounts import AccountStore
-from sql_agent.agent import AgentError, AgentResult
+from sql_agent.agent import AgentError, AgentResult, AgentStopped
 from sql_agent.answer import AnswerIssues, ChartRequest, Draft, Finding, StructuredAnswer, TimeWindow
 from sql_agent.charts import resolve_charts
 from sql_agent.config import load_settings
@@ -59,17 +60,18 @@ def _result(question: str, history=(), model="claude-opus-5", effort="high") -> 
 class StubAgent:
     """Stands in for SqlAgent: real settings, database and layer, but no model calls."""
 
-    def __init__(self, settings, db, *, fail_with: Exception | None = None):
+    def __init__(self, settings, db, *, fail_with: Exception | None = None, wait_to_be_stopped: bool = False):
         self.settings = settings
         self.db = db
         self.layer = load_semantic_layer()
         self.as_of = AS_OF
         self.fail_with = fail_with
+        self.wait_to_be_stopped = wait_to_be_stopped
         self.questions = []
         self.histories = []
         self.choices = []
 
-    def answer(self, question, *, history=(), on_event=None, on_draft=None, model=None, effort=None):
+    def answer(self, question, *, history=(), on_event=None, on_draft=None, model=None, effort=None, should_stop=None):
         self.questions.append(question)
         self.histories.append(tuple(history))
         self.choices.append((model, effort))
@@ -81,6 +83,14 @@ class StubAgent:
             on_draft(Draft(headline="Eight patients have diabetes.", findings=("8 patients match",)))
         if self.fail_with is not None:
             raise self.fail_with
+        if self.wait_to_be_stopped:
+            # Like the real agent: it checks at each step, and ends once it is told to stop.
+            deadline = time.monotonic() + 10
+            while not (should_stop and should_stop()):
+                if time.monotonic() > deadline:
+                    raise AssertionError("never stopped")
+                time.sleep(0.01)
+            raise AgentStopped("Stopped before the answer was finished. Nothing was saved for this question.")
         return _result(question, history, model or self.settings.model, effort or self.settings.effort)
 
 
@@ -951,3 +961,54 @@ def test_a_restart_does_not_reset_a_person_s_daily_budget(settings, db):
     response = again.post("/api/ask", json={"question": "q"})
     assert response.status_code == 429 and response.json()["error"] == "user_budget"
     assert agent.questions == []
+
+
+def test_a_question_can_be_stopped_and_nothing_is_saved_for_it(settings, db):
+    import threading
+
+    client, agent = _client(settings, db, wait_to_be_stopped=True)
+    responses = []
+    asking = threading.Thread(target=lambda: responses.append(client.post("/api/ask", json={"question": "q"})))
+    asking.start()
+    store = client.app.state.conversations
+    conversation_id = None
+    for _ in range(500):
+        busy = [row[0] for row in store._db.execute("SELECT id FROM conversations")]
+        if busy:
+            conversation_id = busy[0]
+            break
+        time.sleep(0.01)
+    assert conversation_id, "the question never started"
+
+    stopped = client.post(f"/api/conversations/{conversation_id}/stop")
+    assert stopped.status_code == 202 and stopped.json() == {"stopping": True}
+    asking.join(timeout=10)
+    assert responses[0].status_code == 409 and responses[0].json()["error"] == "stopped"
+    assert store.get(conversation_id, owner=client.user_id).turns == ()
+    assert client.post(f"/api/conversations/{conversation_id}/stop").status_code == 409, "nothing running now"
+    assert _second_user(client).post(f"/api/conversations/{conversation_id}/stop").status_code == 404
+
+
+def test_a_streamed_question_that_is_stopped_ends_with_a_stopped_event(settings, db):
+    import threading
+
+    client, _ = _client(settings, db, wait_to_be_stopped=True)
+    holder = {}
+
+    def ask():
+        with client.stream("POST", "/api/ask/stream", json={"question": "q"}) as response:
+            holder["text"] = "".join(response.iter_text())
+
+    asking = threading.Thread(target=ask)
+    asking.start()
+    store = client.app.state.conversations
+    for _ in range(500):
+        rows = store._db.execute("SELECT id FROM conversations").fetchall()
+        if rows:
+            break
+        time.sleep(0.01)
+    client.post(f"/api/conversations/{rows[0][0]}/stop")
+    asking.join(timeout=10)
+    events = [block.split("\n")[0] for block in holder["text"].strip().split("\n\n")]
+    assert events[0] == "event: conversation" and events[-1] == "event: error"
+    assert '"error": "stopped"' in holder["text"]

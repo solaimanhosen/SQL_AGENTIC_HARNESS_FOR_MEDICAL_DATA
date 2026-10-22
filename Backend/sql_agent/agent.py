@@ -42,12 +42,18 @@ class AgentError(RuntimeError):
     """The agent could not produce an answer."""
 
 
+class AgentStopped(AgentError):
+    """The person stopped the question before the answer was finished."""
+
+
 def describe_failure(exc: BaseException) -> tuple[str, str] | None:
     """A kind and a message for a failure worth explaining, or None for anything else.
 
     The command line and the HTTP service both use this, so a failure reads the same in
     each. The kinds are agent, auth, api and connection.
     """
+    if isinstance(exc, AgentStopped):
+        return "stopped", str(exc)
     if isinstance(exc, AgentError):
         return "agent", str(exc)
     if isinstance(exc, anthropic.AuthenticationError):
@@ -134,6 +140,7 @@ class SqlAgent:
         on_draft: Callable[[Draft], None] | None = None,
         model: str | None = None,
         effort: str | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> AgentResult:
         """Answer one question, recording every query that ran along the way.
 
@@ -144,6 +151,10 @@ class SqlAgent:
 
         `model` and `effort` choose the model for this question; left out, the settings'
         defaults are used. Callers check them against the catalog first.
+
+        `should_stop` is asked at every step and every piece of streamed text. Once it says
+        yes, the run ends with AgentStopped, which closes the model's stream, so nothing more
+        is generated or paid for.
         """
         question = (question or "").strip()
         if not question:
@@ -176,6 +187,8 @@ class SqlAgent:
                 config={"recursion_limit": self.max_steps},
                 stream_mode=["messages", "values"],
             ):
+                if should_stop is not None and should_stop():
+                    raise AgentStopped("Stopped before the answer was finished. Nothing was saved for this question.")
                 if mode == "values":
                     state = payload
                 else:
