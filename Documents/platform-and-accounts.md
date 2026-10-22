@@ -353,10 +353,24 @@ conversations.
 
 ### Admin console, the interface (Step 22)
 
-Planned:
-- A page at `/admin` with Overview, Checks (run, live output, history), Monitoring (charts),
-  People and Settings.
-- The Admin console item in the avatar menu.
+The page is `/admin`, reached from **Admin console** in the avatar menu. Only admins see the
+item, and a guard sends anyone else back to the chat. The service checks the role again on
+every request. The page loads only when opened (10 kB), and each section has its own
+address, `?tab=`.
+
+| Section | What an admin sees and does |
+|---|---|
+| Overview | Six tiles: patient database, API key, sign-in, service uptime, people, conversations. Today's budget as a meter, and the latest run of each check |
+| Checks | A card per check, with its description and cost. A free check starts at once; a paid one asks first and names the cost. The output streams in as it is written, then the verdict, the failing test names, and a cancel button while it runs. History, with each past run's kept output |
+| Monitoring | Totals for 7, 14 or 30 days. Four daily charts: requests (all, refused, errors), response time (median and 95th percentile), questions, and estimated cost. Tables by model, by person and by refusal reason |
+| People | Every account, with how they sign in, conversations, questions this month and when last seen. A "⋯" menu: make admin or user, disable or enable (each confirmed), set a temporary password shown once with a Copy button. Your own row cannot be changed |
+| Settings | The registration switch, and what is set only in `.env`: Google sign-in and the live evaluation |
+
+**Smaller changes.**
+- The charts reuse the answer charts' component. A chart that comes from the logs rather
+  than a query shows no "Query N" button.
+- The account page and the console share one frame, `ui/page-shell.ts`.
+- Output, test names and log values are shown as text, never as HTML.
 
 ## Decisions
 
@@ -395,8 +409,8 @@ Work is on the branch `sql_agent/platform/dev`, cut from `main` at `004d106`.
 | 18 | Model and effort selection | Done | `9d104b8`, `7741cb6` |
 | 19 | Accounts: password and Google sign-in, ownership, roles, sign-in pages | Done | this step's commits |
 | 20 | Account page and Account settings in the avatar menu | Done | `73fe7b6`, `a3daca8` |
-| 21 | Admin console: fixed checks, monitoring, people, settings | Done | this step's commit |
-| 22 | Admin console: interface | Planned | |
+| 21 | Admin console: fixed checks, monitoring, people, settings | Done | `dd2e1bd`, `da04689` |
+| 22 | Admin console: the page | Done | this step's commit |
 | 23 | Polish, browser checks, records, merge and v4.0.0 | Planned | |
 
 ## Results
@@ -618,6 +632,48 @@ A live Google sign-in waits for real credentials.
 The two paid connection checks run the same `check_setup` commands verified live in Step 18,
 and were not run again.
 
+### Step 22
+
+| Check | After Step 21 | After Step 22 |
+|---|---|---|
+| Interface tests, no network | 166 passed | 180 passed |
+| Production bundle, first load | 124 kB transferred | 123 kB; the console loads separately (10 kB) |
+
+**New tests:**
+- the guard, and the menu item shown only to admins;
+- the sections;
+- the overview's tiles, meter and checks;
+- a check run with output containing `<img onerror>` shown as text, then its verdict and
+  failing tests;
+- a paid check started only after confirming;
+- a past run's output;
+- the four charts built from the right figures, citing no query;
+- the period switch;
+- people:
+  - finding someone;
+  - your own row protected;
+  - making an admin;
+  - a temporary password shown once;
+- closing registration;
+- formatting.
+
+**Checked in headless Chrome** against the scratch service:
+- The scratch admin signed in at `/login?next=/admin` and reached the console.
+- A plain user sent to `/admin` landed back in the chat.
+- The semantic check ran from its card. Its 25 lines streamed in, ending in "17 of 17 checks
+  passed."
+- The paid "Setup and connections" check asked first, naming its cost, and was cancelled.
+
+**Fixed after the browser check:**
+- **Phone width.** The People page scrolled sideways by 545px and Checks by 165px:
+  - a visually hidden column heading escaped its scroll box;
+  - a long cost label did not wrap.
+
+  Both now fit at 390px, as do Overview and Monitoring.
+- **People table at desktop width.** It was wider than its column, which hid each row's
+  menu. Sign-in methods moved under the email, and "last seen" shows the date only, with
+  the time on hover.
+
 ## Open items
 
 - **Google sign-in has not been tried with a real Google account.**
@@ -637,6 +693,9 @@ To be written at Step 23. Things worth showing so far:
 - Copying a conversation's address into a new tab, where it opens.
 - Collapsing the sidebar to the rail and back: the toggle does not move.
 - Pinning a chat, then pressing Ctrl+K and searching for a word from a follow-up question.
+- The admin console. Run "Semantic layer" and watch its output arrive. Then open Monitoring
+  for the day's requests, refusals and the cost of the questions asked in the demo. Point out
+  that the paid checks ask first, and that the live evaluation is switched off in `.env`.
 - Signing up as a new person in a private window: an empty sidebar, and no Fable 5.1 in the
   picker. Then signing in as the admin in the main window: every older conversation, and
   Fable 5.1. Pasting the admin's conversation address into the private window gives "not

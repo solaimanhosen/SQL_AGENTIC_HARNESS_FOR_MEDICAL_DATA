@@ -1,6 +1,6 @@
 import { Routes, UrlMatchResult, UrlSegment } from '@angular/router';
 
-import { signedInGuard, signedOutGuard } from './auth/auth';
+import { adminGuard, signedInGuard, signedOutGuard } from './auth/auth';
 import { AuthPage } from './auth/auth-page';
 import { CONVERSATION_ID, ChatPage } from './chat/chat-page';
 
@@ -40,6 +40,13 @@ export const routes: Routes = [
     loadComponent: () => import('./account/account-page').then((module) => module.AccountPage),
     canActivate: [signedInGuard],
     title: 'Account · Patient data questions',
+  },
+  {
+    path: 'admin',
+    // Loaded only when an admin opens it.
+    loadComponent: () => import('./admin/admin-page').then((module) => module.AdminPage),
+    canActivate: [adminGuard],
+    title: 'Admin console · Patient data questions',
   },
   {
     matcher: chatMatcher,

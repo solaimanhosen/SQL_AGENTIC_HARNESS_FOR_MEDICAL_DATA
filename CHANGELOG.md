@@ -74,6 +74,14 @@ Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-account
 - `GET /api/account/usage`.
 - A new chat starts on your default model. A person's daily budget is rebuilt from the
   stored answers, so a restart no longer resets it.
+- The admin console at `/admin`, for admins, from the avatar menu:
+  - **Overview:** status tiles, today's budget and the latest checks.
+  - **Checks:** a card per check with its cost, a confirmation before any paid one, live
+    output, failing test names, cancel and history.
+  - **Monitoring:** daily charts of requests, response times, questions and cost, and
+    tables by model, by person and refusal reason.
+  - **People:** roles, disabling, and a temporary password shown once.
+  - **Settings:** the registration switch.
 - The admin console's service (ADR 0008):
   - **Overview:** status, accounts, budgets, and the latest checks.
   - **Metrics:** read from the request and run logs.

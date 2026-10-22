@@ -112,7 +112,8 @@ export class AgentApi {
     return (await response.json()) as MyUsage;
   }
 
-  private async json<T>(path: string, method: string, body?: object): Promise<T> {
+  /** Send JSON, or nothing, and read JSON back. Used by the admin client too. */
+  async json<T>(path: string, method: string, body?: object): Promise<T> {
     const response = await this.request(path, {
       method,
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
@@ -252,7 +253,7 @@ export class AgentApi {
    * and the session cookie, which the browser adds itself. A 401 means the session is gone,
    * unless `quiet` says the caller handles it.
    */
-  private async request(
+  async request(
     path: string,
     init: RequestInit,
     { quiet = false }: { quiet?: boolean } = {},

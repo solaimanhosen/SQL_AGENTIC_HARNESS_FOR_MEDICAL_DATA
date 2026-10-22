@@ -91,6 +91,17 @@ export const signedInGuard: CanActivateFn = async (_route, state) => {
   });
 };
 
+/** The admin console: signed-out people sign in first; anyone else goes back to the chat. */
+export const adminGuard: CanActivateFn = async (_route, state) => {
+  const auth = inject(Auth);
+  const router = inject(Router);
+  const user = auth.user() === undefined ? await auth.load().catch(() => null) : auth.user();
+  if (!user) {
+    return router.createUrlTree(['/login'], { queryParams: { next: state.url } });
+  }
+  return user.role === 'admin' ? true : router.createUrlTree(['/']);
+};
+
 /** The sign-in pages, which a signed-in person skips. */
 export const signedOutGuard: CanActivateFn = async () => {
   // Both injected before any await: inject() only works in the guard's first, synchronous part.

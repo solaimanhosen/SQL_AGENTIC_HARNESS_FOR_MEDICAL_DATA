@@ -53,6 +53,17 @@ export function initials(name: string, email: string): string {
             <svg lucideSettings [size]="16"></svg>
             <span>Account settings</span>
           </button>
+          @if (user.role === 'admin') {
+            <button
+              type="button"
+              class="menu-item"
+              cdkMenuItem
+              (cdkMenuItemTriggered)="openAdmin()"
+            >
+              <svg lucideShieldCheck [size]="16"></svg>
+              <span>Admin console</span>
+            </button>
+          }
           <button
             type="button"
             class="menu-item"
@@ -116,6 +127,10 @@ export class ProfileMenu {
 
   protected openAccount(): void {
     void this.router.navigate(['/account']);
+  }
+
+  protected openAdmin(): void {
+    void this.router.navigate(['/admin']);
   }
 
   protected readonly letters = computed(() => {

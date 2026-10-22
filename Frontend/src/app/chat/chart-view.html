@@ -3,14 +3,16 @@
 <figure class="chart">
   <figcaption>
     <span class="title">{{ item.title }}</span>
-    <button
-      type="button"
-      class="chip cite"
-      title="Show the query and the table this chart was drawn from"
-      (click)="source.emit(item.query_number)"
-    >
-      Query {{ item.query_number }}
-    </button>
+    @if (item.query_number > 0) {
+      <button
+        type="button"
+        class="chip cite"
+        title="Show the query and the table this chart was drawn from"
+        (click)="source.emit(item.query_number)"
+      >
+        Query {{ item.query_number }}
+      </button>
+    }
   </figcaption>
 
   @if (multi()) {

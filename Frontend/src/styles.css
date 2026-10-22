@@ -558,6 +558,78 @@ button.chip:hover:not(:disabled) {
   color: var(--danger);
 }
 
+/* A run's or a service's state, as a small rounded label. */
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--chip);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
+.state.good {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.state.bad {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.state.warn {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.state.busy {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* A plain data table inside a settings card. Relative, so a visually hidden heading inside
+   it stays inside its scroll box instead of widening the page. */
+.data-table {
+  position: relative;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.data-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.data-table th,
+.data-table td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.data-table th {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+}
+
+.data-table tbody tr + tr td {
+  border-top: 1px solid var(--border);
+}
+
+.data-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Behind a dialog. The CDK overlay draws it; the colour is ours. */
 .dialog-backdrop {
   background: var(--overlay);

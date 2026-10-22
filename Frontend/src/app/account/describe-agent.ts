@@ -36,6 +36,14 @@ export function isMobileAgent(userAgent: string): boolean {
 
 const WHEN = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' });
 
+const DAY = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' });
+
+/** Only the date of a stored ISO time, for narrow columns. */
+export function formatDay(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : DAY.format(date);
+}
+
 /** A stored ISO time as people read it, in their own time zone. */
 export function formatWhen(iso: string): string {
   const date = new Date(iso);
