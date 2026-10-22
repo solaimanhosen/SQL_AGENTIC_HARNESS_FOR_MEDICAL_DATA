@@ -95,6 +95,12 @@
           </ul>
         }
       </section>
+    } @else if (loading()) {
+      <ul class="placeholders" aria-hidden="true">
+        @for (width of [80, 64, 72, 56, 68]; track $index) {
+          <li><span class="skeleton" [style.width.%]="width"></span></li>
+        }
+      </ul>
     } @else if (!conversations().length) {
       <p class="empty">Your conversations will appear here.</p>
     } @else {

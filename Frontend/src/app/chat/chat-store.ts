@@ -1,6 +1,7 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 
 import { AgentApi, ApiError } from '../api/agent-api';
+import { Toasts } from '../ui/toasts';
 import {
   Answer,
   ConversationChanges,
@@ -37,12 +38,21 @@ export interface Exchange {
 @Injectable({ providedIn: 'root' })
 export class ChatStore {
   private readonly api = inject(AgentApi);
+  private readonly toasts = inject(Toasts);
+  /** Ends the stream of the question being answered, if Stop is pressed before it has an id. */
+  private abort: AbortController | null = null;
   private nextId = 1;
 
   readonly exchanges = signal<Exchange[]>([]);
   readonly conversationId = signal<string | null>(null);
   /** Stored conversations, most recently used first. */
   readonly conversations = signal<ConversationSummary[]>([]);
+  /** False until the list has been asked for once, so the sidebar can show placeholders. */
+  readonly listLoaded = signal(false);
+  /** True while a stored conversation is being fetched. */
+  readonly opening = signal(false);
+  /** True from pressing Stop until the question has ended. */
+  readonly stopping = signal(false);
   /** Conversations matching the search text, or null when nothing is being searched. */
   readonly searchResults = signal<ConversationSummary[] | null>(null);
   /** Counts searches, so an answer to an older one never replaces a newer one's. */
@@ -125,6 +135,8 @@ export class ChatStore {
       this.conversations.set(await this.api.conversations());
     } catch {
       // Kept as it was; an ended session sends the person to sign in (Auth).
+    } finally {
+      this.listLoaded.set(true);
     }
   }
 
@@ -133,6 +145,7 @@ export class ChatStore {
     if (this.busy()) {
       return false;
     }
+    this.opening.set(true);
     try {
       const stored = await this.api.conversation(id);
       this.exchanges.set(
@@ -153,8 +166,13 @@ export class ChatStore {
     } catch (error) {
       if (error instanceof ApiError && error.kind === 'unknown_conversation') {
         this.conversations.update((list) => list.filter((item) => item.id !== id));
+        this.toasts.error('That conversation was deleted or never existed.');
+      } else if (!(error instanceof ApiError && error.status === 401)) {
+        this.toasts.error('The conversation could not be opened. Try again.');
       }
       return false;
+    } finally {
+      this.opening.set(false);
     }
   }
 
@@ -171,6 +189,11 @@ export class ChatStore {
     try {
       this.replace(await this.api.updateConversation(id, changes));
     } catch {
+      this.toasts.error(
+        changes.title !== undefined
+          ? 'The new title could not be saved.'
+          : 'The pin could not be changed.',
+      );
       await this.refreshConversations();
     }
   }
@@ -214,6 +237,11 @@ export class ChatStore {
       await this.api.deleteConversation(id);
     } catch (error) {
       if (!(error instanceof ApiError) || error.kind !== 'unknown_conversation') {
+        this.toasts.error(
+          error instanceof ApiError && error.kind === 'busy'
+            ? 'That conversation is still answering. Delete it when it has finished.'
+            : 'The conversation could not be deleted.',
+        );
         await this.refreshConversations();
         return;
       }
@@ -232,8 +260,14 @@ export class ChatStore {
 
   private async run(id: number, question: string): Promise<void> {
     let turn: number | null = null;
+    this.abort = new AbortController();
     try {
-      const stream = this.api.askStream(question, this.conversationId(), undefined, this.choice());
+      const stream = this.api.askStream(
+        question,
+        this.conversationId(),
+        this.abort.signal,
+        this.choice(),
+      );
       for await (const event of stream) {
         if (event.type === 'conversation') {
           this.conversationId.set(event.conversationId);
@@ -251,7 +285,9 @@ export class ChatStore {
       const failure =
         error instanceof ApiError
           ? error
-          : new ApiError(0, 'error', 'Something went wrong in the page.');
+          : error instanceof DOMException && error.name === 'AbortError'
+            ? new ApiError(0, 'stopped', 'Stopped. Nothing was saved for this question.')
+            : new ApiError(0, 'error', 'Something went wrong in the page.');
       if (failure.kind === 'stream_ended' && turn !== null) {
         // Only the connection was lost. The service finishes the run and stores it.
         const answer = await this.recover(this.conversationId()!, turn);
@@ -266,7 +302,31 @@ export class ChatStore {
         this.conversationId.set(null);
       }
       this.patch(id, { status: 'failed', error: failure, draft: undefined });
+    } finally {
+      this.abort = null;
+      this.stopping.set(false);
     }
+  }
+
+  /**
+   * Stop the question being answered. The service ends the run at its next step and saves
+   * nothing for it. Before the conversation has an id, the stream is simply closed.
+   */
+  async stop(): Promise<void> {
+    if (!this.busy() || this.stopping()) {
+      return;
+    }
+    this.stopping.set(true);
+    const id = this.conversationId();
+    if (id) {
+      try {
+        await this.api.stopQuestion(id);
+        return; // the stream ends with a "stopped" error event
+      } catch {
+        // Fall through: at least stop following it here.
+      }
+    }
+    this.abort?.abort();
   }
 
   /** Wait for a run whose stream was lost to finish on the service, and fetch its answer. */

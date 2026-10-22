@@ -3,7 +3,8 @@
   border-radius: var(--radius-sm);
 }
 
-.query:focus {
+/* Focused from a citation, the highlight below shows where; from the keyboard, the ring. */
+.query:focus:not(:focus-visible) {
   outline: none;
 }
 

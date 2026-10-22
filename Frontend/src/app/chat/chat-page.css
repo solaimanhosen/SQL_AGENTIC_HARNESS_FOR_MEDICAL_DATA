@@ -270,6 +270,31 @@ h1 {
   background: var(--surface-hover);
 }
 
+.loading {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.loading .bubble {
+  justify-self: end;
+  width: min(60%, 24rem);
+  height: 2.5rem;
+  border-radius: var(--radius-xl);
+}
+
+.loading .block {
+  height: 7rem;
+  border-radius: var(--radius-lg);
+}
+
+.loading .line {
+  height: 0.875rem;
+}
+
+.loading .short {
+  width: 60%;
+}
+
 .composer-bar {
   position: sticky;
   bottom: 0;

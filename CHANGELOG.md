@@ -1,11 +1,15 @@
 # Changelog
 
 Notable changes to this project, newest first. Versions follow the project milestones:
-v1 is the backend, v2 adds the web interface, v3 adds analytics, charts and reports.
+v1 is the backend, v2 adds the web interface, v3 adds analytics, charts and reports, and
+v4 adds the model picker, accounts, the admin console and a redesigned interface.
 
-## Unreleased (Phase D, to be v4.0.0)
+## v4.0.0 — 22 October 2026
 
-Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-accounts.md`.
+The interface is redesigned. People choose the model and effort for each question, sign in
+with an account or Google and see only their own conversations, and admins get a console
+for checks, monitoring and accounts. The record is `Documents/platform-and-accounts.md`, and
+the decisions are ADRs 0005 to 0008.
 
 ### Removed
 
@@ -74,6 +78,11 @@ Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-account
 - `GET /api/account/usage`.
 - A new chat starts on your default model. A person's daily budget is rebuilt from the
   stored answers, so a restart no longer resets it.
+- Stop: while an answer is written, the send button becomes Stop. The service ends the run
+  at its next step and saves nothing for it (`POST /api/conversations/{id}/stop`).
+- The question box grows with its text. Loading placeholders replace empty lists, failures
+  that happen out of sight show as toasts, each question is a heading, and a finished answer
+  is announced to screen readers.
 - The admin console at `/admin`, for admins, from the avatar menu:
   - **Overview:** status tiles, today's budget and the latest checks.
   - **Checks:** a card per check with its cost, a confirmation before any paid one, live

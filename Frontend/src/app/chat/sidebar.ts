@@ -83,6 +83,8 @@ export class Sidebar implements OnDestroy {
   readonly mode = input<SidebarMode>('full');
   /** What the service found for the search text, or null while nothing has been found yet. */
   readonly searchResults = input<ConversationSummary[] | null>(null);
+  /** True until the list has been fetched once: placeholders instead of "no conversations". */
+  readonly loading = input(false);
 
   readonly newChat = output<void>();
   readonly open = output<string>();

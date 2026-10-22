@@ -173,6 +173,11 @@ export class AgentApi {
     return (await response.json()) as ConversationSummary;
   }
 
+  /** Stop the question a conversation is answering. Nothing is saved for it. */
+  async stopQuestion(conversationId: string): Promise<void> {
+    await this.request(`/conversations/${conversationId}/stop`, { method: 'POST' });
+  }
+
   async deleteConversation(id: string): Promise<void> {
     await this.request(`/conversations/${id}`, { method: 'DELETE' });
   }

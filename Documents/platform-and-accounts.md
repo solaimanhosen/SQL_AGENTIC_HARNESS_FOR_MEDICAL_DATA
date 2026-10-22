@@ -407,13 +407,30 @@ Work is on the branch `sql_agent/platform/dev`, cut from `main` at `004d106`.
 | 16 | Design system, themes, router, icons, wider column | Done | `f01a0fa` |
 | 17 | Sidebar: rail, search, Pinned, Recents and All chats | Done | `93d0716`, `c0d3535` |
 | 18 | Model and effort selection | Done | `9d104b8`, `7741cb6` |
-| 19 | Accounts: password and Google sign-in, ownership, roles, sign-in pages | Done | this step's commits |
+| 19 | Accounts: password and Google sign-in, ownership, roles, sign-in pages | Done | `08471d3`, `0bf0cfb` |
 | 20 | Account page and Account settings in the avatar menu | Done | `73fe7b6`, `a3daca8` |
 | 21 | Admin console: fixed checks, monitoring, people, settings | Done | `dd2e1bd`, `da04689` |
-| 22 | Admin console: the page | Done | this step's commit |
-| 23 | Polish, browser checks, records, merge and v4.0.0 | Planned | |
+| 22 | Admin console: the page | Done | `f5bbf01` |
+| 23 | Stop, polish, browser checks, records, merge and v4.0.0 | Done | this step's commit and the merge |
+
+Merged into `main` with `--no-ff` and tagged v4.0.0 on 22 October 2026.
 
 ## Results
+
+### Phase D in numbers
+
+| | v3.0.0 | v4.0.0 |
+|---|---|---|
+| Backend tests, no network | 375 passed, 3 skipped | 522 passed, 3 skipped |
+| Interface tests, no network | 108 passed | 188 passed |
+| Security catalogue | 78 of 78 | 78 of 78 |
+| Evaluation | 23 of 23 on Opus 5 | Unchanged; other models not yet scored |
+| Models people can choose | 1 | 5, plus Fable 5.1 for admins |
+| Who can use it | Anyone with the shared token | Accounts, by password or Google, each seeing only their own |
+| First load, transferred | about 100 kB | 125 kB; the account page (5 kB) and the console (10 kB) load when opened |
+| New dependencies | | Angular CDK, Lucide icons, the Inter font; `httpx` listed (already installed) |
+| Decision records | 0001 to 0004 | 0005 model catalog, 0006 accounts, 0007 Google sign-in, 0008 admin console |
+| Live model spend during the phase | | About $0.45 (Step 18) and a fifth of a cent (Step 23) |
 
 ### Step 16
 
@@ -674,6 +691,41 @@ and were not run again.
   menu. Sign-in methods moved under the email, and "last seen" shows the date only, with
   the time on hover.
 
+### Step 23
+
+**Stop.**
+- While an answer is written, the send button becomes Stop.
+- The service checks at every step of the agent and every piece of streamed text. Once Stop
+  is pressed, it ends the run, which closes the model's stream, so nothing more is generated
+  or paid for, and nothing is saved for that question.
+- Pressed before the conversation has an id, the page simply stops following the stream.
+- Tested live on Haiku 5.5: pressed after the first step, the question ended 5.4 seconds
+  later, with nothing in the run log.
+
+**Polish.**
+- The question box grows with its text up to 192 px.
+- Loading placeholders replace "no conversations" while the list loads, and the thread
+  while a conversation opens.
+- Failures that happen out of sight show as toasts: a rename, a pin, a delete or an opening
+  that failed.
+- Each question is a heading, so the answer's sections sit under it.
+- A finished or stopped answer is announced to screen readers.
+- The SQL panel keeps its keyboard focus ring.
+
+**The final browser pass:**
+- Six pages (new chat, a stored answer, Security, Checks, People, Monitoring) at 360, 768,
+  1280 and 1920 px, in light and dark.
+- One sideways scroll was found and fixed: Monitoring at 360 px, where a chart column's
+  minimum was wider than the screen.
+- Sign-in and sign-up were checked at phone width.
+- 37 screenshots for the slides are in `presentation-local/phase-d-screenshots/`, which git
+  ignores.
+
+| Check | After Step 22 | After Step 23 |
+|---|---|---|
+| Backend tests, no network | 519 passed, 3 skipped | 522 passed, 3 skipped |
+| Interface tests, no network | 180 passed | 188 passed |
+
 ## Open items
 
 - **Google sign-in has not been tried with a real Google account.**
@@ -688,18 +740,50 @@ and were not run again.
 
 ## Demo notes
 
-To be written at Step 23. Things worth showing so far:
-- Switching between light and dark from the header.
-- Copying a conversation's address into a new tab, where it opens.
-- Collapsing the sidebar to the rail and back: the toggle does not move.
-- Pinning a chat, then pressing Ctrl+K and searching for a word from a follow-up question.
-- The admin console. Run "Semantic layer" and watch its output arrive. Then open Monitoring
-  for the day's requests, refusals and the cost of the questions asked in the demo. Point out
-  that the paid checks ask first, and that the live evaluation is switched off in `.env`.
-- Signing up as a new person in a private window: an empty sidebar, and no Fable 5.1 in the
-  picker. Then signing in as the admin in the main window: every older conversation, and
-  Fable 5.1. Pasting the admin's conversation address into the private window gives "not
-  found".
-- Asking the same question on Haiku 5.5 at low effort and on Opus 5 at high effort, and
-  comparing the two answers' meta lines: time, tokens and model. Point at "Not yet
-  evaluated" in the menu: the picker says plainly which models have been scored.
+A suggested order, about seven minutes. Before the demo, have the following ready:
+- the admin signed in, in the main window;
+- one stored conversation with a chart;
+- a private window for a second person.
+
+1. **The interface.**
+   - Open the app in light mode, then switch to dark from the header.
+   - Collapse the sidebar to the rail and back: the toggle does not move.
+   - Press Ctrl+K and search for a word from a follow-up question. Pin the result, and it
+     moves to Pinned.
+2. **Choose the model.**
+   - Ask "How many patients have diabetes?" on Haiku 5.5 at low effort, then again on
+     Opus 5 at high effort.
+   - Compare the two meta lines: time, tokens and model.
+   - Open the model menu and point at the prices and "Not yet evaluated": the picker says
+     plainly which models have been scored.
+3. **Stop.** Ask a long question and press Stop after the first step. The answer ends, and
+   nothing is saved or spent after that point.
+4. **Accounts.**
+   - In the private window, sign up as a new person: an empty sidebar, and no Fable 5.1 in
+     the picker.
+   - Paste the admin's conversation address there: "not found".
+   - Open Account settings: devices, default model, usage this month with its estimated
+     cost.
+5. **The admin console.**
+   - Overview: everything up, today's budget, the latest checks.
+   - Run "Semantic layer" and watch its output arrive.
+   - Start "Setup and connections" to show that a paid check asks first, then cancel.
+   - Monitoring: the demo's own requests, refusals and the cost of the questions just
+     asked.
+   - People: a role, and a temporary password shown once.
+
+Lines worth having ready:
+- "Every model gets the same request, and the service refuses any model or effort it does
+  not list."
+- "Each person sees only their own conversations; someone else's answers 'not found', as if
+  it did not exist."
+- "The admin console runs fixed checks only. Nothing typed in the browser becomes a
+  command."
+- "Admins see totals and accounts, never anyone's questions."
+
+Limits to state if asked:
+- Only Opus 5 has been scored on the evaluation.
+- Google sign-in has not been tried with a real Google account yet.
+- Password resets go through an admin until there is an email service.
+- Registration is open by default and should be closed before the service is reachable
+  from the internet.

@@ -6,6 +6,10 @@
 
 .question {
   justify-self: end;
+  font-size: var(--text-base);
+  font-weight: 400;
+  line-height: var(--leading);
+  letter-spacing: 0;
   max-width: min(85%, 40rem);
   margin: 0;
   padding: var(--space-2-5) var(--space-4);
@@ -67,6 +71,12 @@
 .draft-findings {
   margin: var(--space-1-5) 0 0;
   padding-left: var(--space-5);
+}
+
+.failed.stopped {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
 }
 
 .failed {

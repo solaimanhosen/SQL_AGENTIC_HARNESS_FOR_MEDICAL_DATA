@@ -32,6 +32,7 @@ function fakeApi(
     me: vi.fn(async () => userFixture()),
     authConfig: vi.fn(async () => ({ registration_open: true, google_enabled: false })),
     logout: vi.fn(async () => undefined),
+    stopQuestion: vi.fn(async (_id: string) => undefined),
     health: vi.fn(health),
     askStream: vi.fn(stream),
     conversations: vi.fn(async (_search?: string): Promise<ConversationSummary[]> => []),
@@ -106,10 +107,15 @@ describe('ChatPage', () => {
     (element.querySelector('.example') as HTMLButtonElement).click();
     await fixture.whenStable();
 
-    expect(api.askStream).toHaveBeenCalledWith(EXAMPLE_QUESTIONS[0], null, undefined, {
-      model: 'claude-opus-5',
-      effort: 'high',
-    });
+    expect(api.askStream).toHaveBeenCalledWith(
+      EXAMPLE_QUESTIONS[0],
+      null,
+      expect.any(AbortSignal),
+      {
+        model: 'claude-opus-5',
+        effort: 'high',
+      },
+    );
     expect(element.querySelector('.question')?.textContent).toBe(EXAMPLE_QUESTIONS[0]);
     expect(element.querySelector('.headline')?.textContent).toBe('Eight patients have diabetes.');
     expect(element.querySelector('.findings li')?.textContent).toContain('Query 1');
@@ -185,6 +191,75 @@ describe('ChatPage', () => {
     });
   });
 
+  it('turns the send button into Stop while an answer is written, and stops it', async () => {
+    let release!: () => void;
+    const api = fakeApi(async function* () {
+      yield { type: 'conversation', conversationId: 'c'.repeat(32), turn: 1 };
+      await new Promise<void>((resolve) => (release = resolve));
+      throw new ApiError(
+        409,
+        'stopped',
+        'Stopped before the answer was finished. Nothing was saved for this question.',
+      );
+    });
+    const { fixture, element } = await render(api);
+    (element.querySelector('.example') as HTMLButtonElement).click();
+    await vi.waitFor(async () => {
+      await fixture.whenStable();
+      expect(element.querySelector('button.stop')).not.toBeNull();
+    });
+    (element.querySelector('button.stop') as HTMLButtonElement).click();
+    await fixture.whenStable();
+    expect(api.stopQuestion).toHaveBeenCalledWith('c'.repeat(32));
+    release();
+    await vi.waitFor(async () => {
+      await fixture.whenStable();
+      expect(element.querySelector('.failed.stopped p')?.textContent).toContain(
+        'Nothing was saved',
+      );
+    });
+    expect(element.querySelector('.failed.stopped button')?.textContent?.trim()).toBe('Ask again');
+    expect(element.querySelector('button.stop')).toBeNull();
+    expect(element.querySelector('.thread [aria-live]')?.textContent).toContain('Stopped');
+  });
+
+  it('announces an answer when it arrives', async () => {
+    const { fixture, element } = await render(fakeApi(answers));
+    (element.querySelector('.example') as HTMLButtonElement).click();
+    await fixture.whenStable();
+    expect(element.querySelector('.thread [aria-live]')?.textContent).toBe(
+      'Answer ready: Eight patients have diabetes.',
+    );
+    expect(element.querySelector('h2.question')?.textContent).toBe(EXAMPLE_QUESTIONS[0]);
+  });
+
+  it('shows placeholders, not "no conversations", until the list has loaded', async () => {
+    let release!: () => void;
+    const api = fakeApi(answers);
+    api.conversations.mockImplementation(
+      () => new Promise((resolve) => (release = () => resolve([summaryFixture()]))),
+    );
+    const { fixture, element } = await render(api);
+    expect(element.querySelectorAll('.side .placeholders .skeleton').length).toBe(5);
+    expect(element.querySelector('.side .empty')).toBeNull();
+    release();
+    await vi.waitFor(async () => {
+      await fixture.whenStable();
+      expect(element.querySelector('.side .placeholders')).toBeNull();
+    });
+  });
+
+  it('grows the question box with its text, up to a limit', async () => {
+    const { fixture, element } = await render(fakeApi(answers));
+    const box = element.querySelector('textarea') as HTMLTextAreaElement;
+    Object.defineProperty(box, 'scrollHeight', { configurable: true, get: () => 500 });
+    box.value = 'line\n'.repeat(30);
+    box.dispatchEvent(new Event('input'));
+    await fixture.whenStable();
+    expect(box.style.height).toBe('192px');
+    expect(box.style.overflowY).toBe('auto');
+  });
+
   it('shows who is signed in, and signs out from the profile menu', async () => {
     const api = fakeApi(answers);
     const { fixture, element } = await render(api);
@@ -216,10 +291,15 @@ describe('ChatPage', () => {
     box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
     await fixture.whenStable();
 
-    expect(api.askStream).toHaveBeenCalledWith('How many patients are there?', null, undefined, {
-      model: 'claude-opus-5',
-      effort: 'high',
-    });
+    expect(api.askStream).toHaveBeenCalledWith(
+      'How many patients are there?',
+      null,
+      expect.any(AbortSignal),
+      {
+        model: 'claude-opus-5',
+        effort: 'high',
+      },
+    );
     expect(box.value).toBe('');
   });
 
@@ -266,10 +346,15 @@ describe('ChatPage', () => {
 
       (element.querySelector('.example') as HTMLButtonElement).click();
       await fixture.whenStable();
-      expect(api.askStream).toHaveBeenLastCalledWith(EXAMPLE_QUESTIONS[0], null, undefined, {
-        model: 'claude-haiku-5-5',
-        effort: 'low',
-      });
+      expect(api.askStream).toHaveBeenLastCalledWith(
+        EXAMPLE_QUESTIONS[0],
+        null,
+        expect.any(AbortSignal),
+        {
+          model: 'claude-haiku-5-5',
+          effort: 'low',
+        },
+      );
     });
 
     it("takes the new model's default when it does not offer the effort", async () => {

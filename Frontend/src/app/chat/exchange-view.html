@@ -1,6 +1,6 @@
 @let item = exchange();
 <article class="exchange">
-  <p class="question">{{ item.question }}</p>
+  <h2 class="question">{{ item.question }}</h2>
 
   @switch (item.status) {
     @case ('working') {
@@ -41,10 +41,13 @@
       <app-answer-view [answer]="item.answer!" [steps]="item.steps" />
     }
     @case ('failed') {
-      <div class="card failed" role="alert">
+      @let stopped = item.error?.kind === 'stopped';
+      <div class="card failed" [class.stopped]="stopped" [attr.role]="stopped ? 'status' : 'alert'">
         <p>{{ item.error?.message }}</p>
         @if (item.error?.kind !== 'unauthenticated') {
-          <button type="button" class="link" (click)="retry.emit(item.id)">Try again</button>
+          <button type="button" class="link" (click)="retry.emit(item.id)">
+            {{ stopped ? 'Ask again' : 'Try again' }}
+          </button>
         }
       </div>
     }

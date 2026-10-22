@@ -558,6 +558,23 @@ button.chip:hover:not(:disabled) {
   color: var(--danger);
 }
 
+/* A placeholder while something loads. It shimmers unless motion is reduced. */
+.skeleton {
+  border-radius: var(--radius-md);
+  background: linear-gradient(90deg, var(--chip) 0%, var(--surface-hover) 50%, var(--chip) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
 /* A run's or a service's state, as a small rounded label. */
 .state {
   display: inline-flex;

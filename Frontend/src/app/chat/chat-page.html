@@ -6,6 +6,7 @@
   [mode]="sideMode()"
   [conversations]="store.conversations()"
   [searchResults]="store.searchResults()"
+  [loading]="!store.listLoaded()"
   [activeId]="store.conversationId()"
   [busy]="store.busy()"
   (newChat)="newChat()"
@@ -87,7 +88,16 @@
   </header>
 
   <main class="thread">
-    @if (!store.exchanges().length) {
+    <p class="visually-hidden" aria-live="polite">{{ announcement() }}</p>
+    @if (store.opening()) {
+      <div class="loading" aria-hidden="true">
+        <div class="skeleton bubble"></div>
+        <div class="skeleton block"></div>
+        <div class="skeleton line"></div>
+        <div class="skeleton line short"></div>
+      </div>
+      <p class="visually-hidden" role="status">Opening the conversation…</p>
+    } @else if (!store.exchanges().length) {
       <section class="intro">
         <h2>Ask about the patient database in plain language</h2>
         <p>
@@ -111,8 +121,10 @@
       </section>
     }
 
-    @for (exchange of store.exchanges(); track exchange.id) {
-      <app-exchange-view [exchange]="exchange" (retry)="store.retry($event)" />
+    @if (!store.opening()) {
+      @for (exchange of store.exchanges(); track exchange.id) {
+        <app-exchange-view [exchange]="exchange" (retry)="store.retry($event)" />
+      }
     }
 
     <div #end></div>
@@ -127,6 +139,8 @@
             ? 'Ask a follow-up, or a new question'
             : 'Ask a question about the patient data'
         "
+        [stopping]="store.stopping()"
+        (stop)="store.stop()"
         [catalog]="store.catalog()"
         [choice]="store.choice()"
         (choiceChange)="store.choose($event)"

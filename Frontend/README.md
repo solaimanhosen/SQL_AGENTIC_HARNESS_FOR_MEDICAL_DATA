@@ -59,7 +59,8 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/chat/result-table.ts` | The rows one query returned. |
 | `src/app/chat/export.ts` | CSV and JSON building, file names, and the download and clipboard helpers. |
 | `src/app/chat/step-log.ts` | Every step the agent took, with the SQL of each query, live and afterwards. |
-| `src/app/chat/composer.ts` | The question box. Enter sends, Shift+Enter adds a line. |
+| `src/app/chat/composer.ts` | The question box. Enter sends, Shift+Enter adds a line, and it grows with its text. While an answer is written, the send button becomes Stop. |
+| `src/app/ui/toasts.ts` | Short notices for failures that happen out of sight, such as a rename that could not be saved. |
 | `src/app/chat/model-picker.ts` | Two menus in the question box: the model, with its price and evaluation status, and the effort. The choice applies to the next question; a reopened conversation continues on its latest answer's model. |
 | `src/app/auth/auth.ts` | Who is signed in, the guards for the chat and the sign-in pages, and the messages for Google sign-in codes. |
 | `src/app/auth/auth-page.ts` | Sign in and create an account: email and password, and "Continue with Google" when the service offers it. |

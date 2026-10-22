@@ -107,6 +107,21 @@ export class ChatPage implements OnInit {
   protected readonly resizing = signal(false);
   protected readonly sideMin = SIDEBAR_MIN;
 
+  /**
+   * What a screen reader hears when an answer arrives or a question ends, read from the
+   * newest exchange. The live steps announce themselves inside the exchange.
+   */
+  protected readonly announcement = computed(() => {
+    const last = this.store.exchanges().at(-1);
+    if (!last || last.status === 'working') {
+      return '';
+    }
+    if (last.status === 'answered') {
+      return `Answer ready: ${last.answer?.headline ?? 'see below'}`;
+    }
+    return last.error?.message ?? 'The question did not finish.';
+  });
+
   /** The open conversation's title, or nothing for a new chat. */
   protected readonly title = computed(() => {
     const id = this.store.conversationId();

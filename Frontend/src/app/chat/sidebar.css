@@ -181,6 +181,15 @@ li.active {
   background: var(--chip);
 }
 
+.placeholders li {
+  padding: 0 var(--space-2);
+}
+
+.placeholders .skeleton {
+  display: block;
+  height: 0.75rem;
+}
+
 .empty {
   margin: 0;
   padding: 0 var(--space-2);

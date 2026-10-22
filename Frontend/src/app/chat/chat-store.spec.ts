@@ -8,17 +8,23 @@ import {
   conversationFixture,
   summaryFixture,
 } from '../testing/fixtures';
+import { Toasts } from '../ui/toasts';
 import { ChatStore, MAX_QUESTION_CHARS } from './chat-store';
 
-type Script = (question: string, conversationId: string | null) => AsyncGenerator<StreamEvent>;
+type Script = (
+  question: string,
+  conversationId: string | null,
+  signal?: AbortSignal,
+) => AsyncGenerator<StreamEvent>;
 
 function setup(script: Script) {
   const calls: { question: string; conversationId: string | null }[] = [];
   const api = {
-    askStream: (question: string, conversationId: string | null) => {
+    askStream: (question: string, conversationId: string | null, signal?: AbortSignal) => {
       calls.push({ question, conversationId });
-      return script(question, conversationId);
+      return script(question, conversationId, signal);
     },
+    stopQuestion: vi.fn(async (_id: string) => undefined),
     conversations: vi.fn(async (_search?: string): Promise<ConversationSummary[]> => [
       summaryFixture(),
     ]),
@@ -234,13 +240,70 @@ describe('ChatStore', () => {
     expect(store.choice()).toEqual({ model: 'claude-opus-5', effort: 'high' });
   });
 
+  it('stops a question on the service, which ends the stream as stopped', async () => {
+    let release!: () => void;
+    const { store, api } = setup(async function* () {
+      yield { type: 'conversation', conversationId: 'c'.repeat(32), turn: 1 };
+      await new Promise<void>((resolve) => (release = resolve));
+      throw new ApiError(409, 'stopped', 'Stopped before the answer was finished.');
+    });
+    const asking = store.ask('How many?');
+    await vi.waitFor(() => expect(store.conversationId()).toBe('c'.repeat(32)));
+
+    const stopping = store.stop();
+    expect(store.stopping()).toBe(true);
+    await stopping;
+    expect(api.stopQuestion).toHaveBeenCalledWith('c'.repeat(32));
+    release();
+    await asking;
+    expect(store.exchanges()[0].status).toBe('failed');
+    expect(store.exchanges()[0].error?.kind).toBe('stopped');
+    expect(store.stopping()).toBe(false);
+  });
+
+  it('closes the stream when stopped before the service has named the conversation', async () => {
+    const { store, api } = setup(async function* (_q, _c, signal) {
+      await new Promise<void>((_resolve, reject) =>
+        signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))),
+      );
+    });
+    const asking = store.ask('How many?');
+    await store.stop();
+    await asking;
+    expect(api.stopQuestion).not.toHaveBeenCalled();
+    expect(store.exchanges()[0].error?.kind).toBe('stopped');
+    expect(store.exchanges()[0].error?.message).toBe(
+      'Stopped. Nothing was saved for this question.',
+    );
+  });
+
+  it('says so in a toast when a rename cannot be saved', async () => {
+    const { store, api } = setup(answered);
+    await store.refreshConversations();
+    api.updateConversation.mockRejectedValue(new ApiError(0, 'unreachable', 'Down.'));
+    await store.rename('c'.repeat(32), 'New title');
+    expect(
+      TestBed.inject(Toasts)
+        .items()
+        .map((item) => item.message),
+    ).toEqual(['The new title could not be saved.']);
+  });
+
+  it('marks the list as loaded once it has been asked for, even if that failed', async () => {
+    const { store, api } = setup(answered);
+    api.conversations.mockRejectedValue(new ApiError(0, 'unreachable', 'Down.'));
+    expect(store.listLoaded()).toBe(false);
+    await store.refreshConversations();
+    expect(store.listLoaded()).toBe(true);
+  });
+
   it('sends the choice with the question', async () => {
     const { store, api } = setup(answered);
     const asked = vi.spyOn(api, 'askStream');
     await store.loadModels();
     store.choose({ model: 'claude-haiku-5-5', effort: 'medium' });
     await store.ask('How many?');
-    expect(asked).toHaveBeenCalledWith('How many?', null, undefined, {
+    expect(asked).toHaveBeenCalledWith('How many?', null, expect.any(AbortSignal), {
       model: 'claude-haiku-5-5',
       effort: 'medium',
     });

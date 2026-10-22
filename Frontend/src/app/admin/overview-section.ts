@@ -128,7 +128,7 @@ const CHECK_LABELS: Record<string, string> = {
   styles: `
     .tiles {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(min(13rem, 100%), 1fr));
       gap: var(--space-4);
       margin-bottom: var(--space-5);
     }
