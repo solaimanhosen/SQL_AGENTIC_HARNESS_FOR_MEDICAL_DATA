@@ -307,16 +307,56 @@ address, `?tab=`.
 
 The **Admin console** item joins the avatar menu in Step 22, with its page.
 
-### Admin console (Steps 21 and 22)
+### Admin console, the service (Step 21)
+
+The design is ADR 0008. Every route is under `/api/admin`, and needs an admin's session.
+
+**Checks are fixed commands.** Each one is a list of arguments written in `jobs.py`, run as a
+subprocess in `Backend/` without a shell. The browser names a job. The only thing it can add
+is a choice from a fixed list (the live evaluation's model and effort), checked before it
+becomes an argument.
+
+| Job | What it runs | Cost |
+|---|---|---|
+| Unit tests | pytest, read back from its JUnit report into counts and failing test names | Free |
+| Security catalogue | All 78 attack cases, and the row-count check | Free |
+| Semantic layer | The catalog against the schema, and every definition's check | Free |
+| Evaluation, dry run | The golden SQL of all 23 questions | Free |
+| Setup and connections | `check_setup`, with one two-token call to the default model | A fraction of a cent |
+| Ping every model | One two-token call to each model in the picker | About a tenth of a cent |
+| Evaluation, live | The 23 questions on a chosen model and effort | Dollars; off unless `SQL_AGENT_ADMIN_LIVE_EVAL=1` |
+
+**How a run behaves.**
+- Only one runs at a time, and each has a time limit; an admin can cancel it.
+- Output streams to the console line by line, and is kept with the run: up to 200,000
+  characters, keeping the end.
+- History lives in the application database, at schema version 5.
+- A run cut short by a restart is marked interrupted.
+
+**Monitoring.** Read from the logs the service already writes, with nothing new recorded:
+- per day: requests, refusals by reason, errors, and median and 95th-percentile latency;
+- questions, tokens and estimated cost by day, by model and by person.
+
+People appear by id in the logs, and only the admin view turns ids into emails.
+
+**People.**
+- List every account with its conversations and questions this month.
+- Make someone an admin or a user.
+- Disable an account, which signs the person out at once.
+- Give someone a temporary password, shown once, which ends all their sessions.
+- An admin cannot demote or disable themselves, or remove the last enabled admin.
+
+**Settings.** Open or close registration.
+
+**Never shown.** An admin sees totals and accounts, never the text of anyone's
+conversations.
+
+### Admin console, the interface (Step 22)
 
 Planned:
-- **Fixed jobs only.** The browser picks a job by name and sends no arguments, one job runs
-  at a time, and output streams live and is kept as history.
-- **Jobs:** connections, unit tests, semantic checks, the security catalogue and the
-  dry-run evaluation.
-- **Paid jobs:** the live evaluation is built but switched off by default.
-- **Monitoring:** read from the request and run logs.
-- **Users:** user management.
+- A page at `/admin` with Overview, Checks (run, live output, history), Monitoring (charts),
+  People and Settings.
+- The Admin console item in the avatar menu.
 
 ## Decisions
 
@@ -354,8 +394,8 @@ Work is on the branch `sql_agent/platform/dev`, cut from `main` at `004d106`.
 | 17 | Sidebar: rail, search, Pinned, Recents and All chats | Done | `93d0716`, `c0d3535` |
 | 18 | Model and effort selection | Done | `9d104b8`, `7741cb6` |
 | 19 | Accounts: password and Google sign-in, ownership, roles, sign-in pages | Done | this step's commits |
-| 20 | Account page and Account settings in the avatar menu | Done | this step's commits |
-| 21 | Admin console: backend jobs and monitoring | Planned | |
+| 20 | Account page and Account settings in the avatar menu | Done | `73fe7b6`, `a3daca8` |
+| 21 | Admin console: fixed checks, monitoring, people, settings | Done | this step's commit |
 | 22 | Admin console: interface | Planned | |
 | 23 | Polish, browser checks, records, merge and v4.0.0 | Planned | |
 
@@ -538,6 +578,45 @@ A live Google sign-in waits for real credentials.
 - Usage after a restart, showing today's 88,713 tokens;
 - sign-in returning to `/account?tab=usage`;
 - no sideways scroll at 390 px.
+
+### Step 21
+
+| Check | After Step 20 | After Step 21 |
+|---|---|---|
+| Backend tests, no network | 493 passed, 3 skipped | 519 passed, 3 skipped |
+| Security catalogue | 78 of 78 | 78 of 78 |
+
+**New tests:**
+- **The runner, with stand-in jobs:** output and verdicts, failures, a time limit, one at a
+  time, cancelling, the fixed choices (an injected `green; rm -rf /` is refused), history,
+  runs interrupted by a restart, and long output keeping its end without skipping a line
+  as it streams.
+- **The pytest summary.**
+- **Every real job:** a fixed command, and the live evaluation off by default.
+- **Metrics from sample logs.**
+- **The routes:**
+  - users get 403 and signed-out requests get 401 everywhere;
+  - the overview;
+  - metrics naming people only for admins;
+  - a run started, streamed and kept;
+  - a second run refused while one runs;
+  - unknown jobs and runs;
+  - the application header;
+  - managing people, including the temporary password;
+  - an admin unable to lock themselves out;
+  - closing registration.
+
+**The real checks**, run through a live service by an admin over its API:
+
+| Job | Result | Time |
+|---|---|---|
+| Semantic layer | 17 of 17 checks passed | 0.3 s |
+| Evaluation, dry run | Golden answers verified for 23 questions | 2.3 s |
+| Security catalogue | 78 of 78, row counts unchanged | 61.8 s |
+| Unit tests | 519 passed, 0 failed, 3 skipped | 19.8 s |
+
+The two paid connection checks run the same `check_setup` commands verified live in Step 18,
+and were not run again.
 
 ## Open items
 

@@ -43,11 +43,13 @@ from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .account_routes import InvalidCredentials, account_router
+from .admin_routes import SelfChange, admin_router
 from .accounts import AccountError, AccountStore, User
 from .agent import AgentError, AgentResult, SqlAgent, Turn, describe_failure
 from .appdb import AppDatabase
 from .auth import CSRF_HEADER, CsrfGuard, NotAllowed, NotSignedIn, Sessions, SignInThrottle, Throttled
 from .google_login import GoogleConfig, TokenExchange, exchange_code, load_google_config
+from .jobs import JobError, JobRunner
 from .passwords import PasswordRejected
 from .answer import Draft
 from .conversations import (
@@ -207,6 +209,15 @@ HTTP_ERROR_KINDS = {404: "not_found", 405: "method_not_allowed", 413: "too_large
 # Read Google's client from the environment unless a test passes one, or None for off.
 FROM_ENVIRONMENT = object()
 
+JOB_ERROR_STATUS = {
+    "unknown_job": 404,
+    "unknown_run": 404,
+    "job_busy": 409,
+    "not_running": 409,
+    "job_disabled": 403,
+    "invalid_choice": 422,
+}
+
 ACCOUNT_ERROR_STATUS = {
     "email_taken": 409,
     "registration_closed": 403,
@@ -225,6 +236,7 @@ def create_app(
     google: GoogleConfig | None | object = FROM_ENVIRONMENT,
     token_exchange: TokenExchange = exchange_code,
     throttle: SignInThrottle | None = None,
+    jobs: JobRunner | None = None,
 ) -> FastAPI:
     """Build the service around one agent, which is safe to share between requests.
 
@@ -240,6 +252,7 @@ def create_app(
         google = load_google_config(agent.settings.public_url)
     sessions = Sessions(accounts)
     limits = SpendingLimits.from_settings(agent.settings) if limits is None else limits
+    jobs = JobRunner(conversations.database) if jobs is None else jobs
     # Streaming runs outlive their connection, so they are held here until they finish.
     background: set[asyncio.Task] = set()
     app = FastAPI(
@@ -304,6 +317,14 @@ def create_app(
     @app.exception_handler(AccountError)
     async def account_error(_: Request, exc: AccountError) -> JSONResponse:
         return _error(ACCOUNT_ERROR_STATUS.get(exc.kind, 422), exc.kind, exc.message)
+
+    @app.exception_handler(JobError)
+    async def job_error(_: Request, exc: JobError) -> JSONResponse:
+        return _error(JOB_ERROR_STATUS.get(exc.kind, 422), exc.kind, exc.message)
+
+    @app.exception_handler(SelfChange)
+    async def self_change(_: Request, exc: SelfChange) -> JSONResponse:
+        return _error(409, "self_change", exc.message)
 
     @app.exception_handler(PasswordRejected)
     async def weak_password(_: Request, exc: PasswordRejected) -> JSONResponse:
@@ -495,8 +516,20 @@ def create_app(
             conversations=conversations,
         )
     )
+    app.include_router(
+        admin_router(
+            agent=agent,
+            accounts=accounts,
+            conversations=conversations,
+            limits=limits,
+            sessions=sessions,
+            jobs=jobs,
+            google_enabled=google is not None,
+        )
+    )
     app.state.accounts = accounts
     app.state.conversations = conversations
+    app.state.jobs = jobs
     return app
 
 

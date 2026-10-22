@@ -51,6 +51,8 @@ Four inputs are assumed hostile, whatever they look like:
 | Guessing passwords | Passwords are hashed with scrypt (n = 2^15) and a per-user salt, and must be 12 to 128 characters. A wrong password and an unknown email get the same answer in the same time. Failed sign-ins are limited per address and per email over 10 minutes | Tests of the hash, the rules, the identical answers and the throttle |
 | Taking over an account through Google sign-in | The sign-in uses a one-time state bound to the browser by a cookie, a nonce and PKCE. The ID token's issuer, audience, expiry, nonce and verified email are checked. A Google identity is linked to an existing account only if its email was verified, by Google or by an admin, never to a self-registered one (ADR 0007). Where to return is limited to paths inside the application | Tests with a fake Google for a missing, mismatched, reused and expired state, each claim, linking rules, and unsafe return paths |
 | Expensive models picked by anyone | Admin-only models are refused to everyone else before anything runs | A service test that a user is refused Fable 5.1 and an admin is not |
+| Running commands through the admin console | Every check is a fixed list of arguments in `jobs.py`, run without a shell. The browser names a job and may add only a choice from a fixed list (a catalog model, an effort), checked before it becomes an argument. One job at a time, each with a time limit. The paid live evaluation is off unless switched on in `.env`. Every console route needs an admin's session and, for changes, the application header (ADR 0008) | Tests that a user gets 403 and a signed-out request 401 on every console route, that an unlisted choice is refused, that every real job is a fixed command, that the live evaluation is off by default, and that a run times out and can be cancelled |
+| An admin locking everyone out | An admin cannot demote or disable themselves, or remove the last enabled admin | Tests of each refusal |
 | Cost as a denial of service | Before a question reaches the model: a limit on questions running at once, a token budget per UTC day for the service and another per person, and a token budget per conversation. Runs still in progress hold a reservation, so a burst cannot overspend, and a run whose reader left still counts | Unit tests of the ledger, and service tests showing each limit refuses with a 429 before the model is called |
 | Oversized requests | Bodies over 16 KB are refused whether or not they declare their length, and a question is capped at 2,000 characters | Tests for a declared and an undeclared oversized body |
 | Statistics that read past the row cap | The analytics tools take their own SQL and may read up to `SQL_AGENT_ANALYSIS_MAX_ROWS` rows (100,000 by default), but through the same `run_query`: the same validator, authorizer, read-only connection, time limit and engine limits. Only the computed table reaches the model. A result over the cap is refused, never computed on in part | Every catalogue attack run a second time with the analysis cap, and eight more through the tools themselves, including identity columns named as the value or the group |
@@ -152,6 +154,12 @@ a sign the source text had been tampered with.
   same thinking, effort and structured-output settings, so the same checks apply to every
   answer. Only Opus 5 has been scored by the evaluation; the others are labelled "Not yet
   evaluated" in the picker.
+- **An admin can make the service spend, and use its CPU.** The connection checks make tiny
+  model calls, the live evaluation costs dollars when switched on, and the test suite and the
+  security catalogue use the server's CPU for up to a minute. Only admins can start them, one
+  at a time.
+- **A temporary password is shown to the admin who set it.** The admin hands it over by some
+  other channel, and the person should change it at once; nothing forces them to yet.
 - **The Google client secret sits in `Backend/.env`.** Like the Anthropic key, it is kept out
   of the settings object and never logged, but anyone who can read that file can impersonate
   this application to Google.

@@ -89,6 +89,23 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE INDEX conversations_by_owner ON conversations(owner, updated_at);
     """,
+    # 5: the checks an admin ran from the console, with their output and verdict.
+    """
+    CREATE TABLE check_runs (
+        id TEXT PRIMARY KEY,
+        job TEXT NOT NULL,
+        status TEXT NOT NULL,
+        started_by TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        exit_code INTEGER,
+        choices_json TEXT NOT NULL DEFAULT '{}',
+        summary_json TEXT NOT NULL DEFAULT '{}',
+        output TEXT NOT NULL DEFAULT '',
+        truncated INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX check_runs_by_job ON check_runs(job, started_at);
+    """,
 )
 SCHEMA_VERSION = 1 + len(MIGRATIONS)
 

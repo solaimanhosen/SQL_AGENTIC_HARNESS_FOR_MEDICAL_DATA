@@ -191,6 +191,25 @@ class ConversationStore:
             row = self._db.execute("SELECT tokens_spent FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
             return row["tokens_spent"] if row else 0
 
+    def owner_counts(self, *, since: str) -> dict[str | None, dict]:
+        """For each owner: conversations kept, and questions answered since `since`."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT c.owner AS owner, COUNT(DISTINCT c.id) AS conversations,"
+                " COUNT(t.turn) FILTER (WHERE t.created_at >= ?) AS questions"
+                " FROM conversations c LEFT JOIN turns t ON t.conversation_id = c.id"
+                " WHERE c.turn_count > 0 GROUP BY c.owner",
+                (since,),
+            ).fetchall()
+            return {row["owner"]: {"conversations": row["conversations"], "questions": row["questions"]} for row in rows}
+
+    def totals(self, *, since: str) -> dict:
+        """Across everyone: conversations kept, and questions answered since `since`."""
+        with self._lock:
+            conversations = self._db.execute("SELECT COUNT(*) FROM conversations WHERE turn_count > 0").fetchone()[0]
+            questions = self._db.execute("SELECT COUNT(*) FROM turns WHERE created_at >= ?", (since,)).fetchone()[0]
+            return {"conversations": conversations, "questions": questions}
+
     def tokens_since(self, *, owner: str | None, since: str) -> int:
         """Model tokens the owner's stored answers used since `since` (an ISO time)."""
         with self._lock:

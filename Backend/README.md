@@ -177,6 +177,26 @@ answer is a 422, and a failure at the Anthropic API is a 502 or 503. An unknown 
 deleted conversation is a 404. The agent runs in a worker thread, so a slow question does not
 block other requests.
 
+### The admin console's routes
+
+Every route under `/api/admin` needs an admin's session (ADR 0008):
+
+| Method | Path | Does |
+|---|---|---|
+| GET | `/api/admin/overview` | Database, application database, API key, Google and registration status, accounts, conversations, budgets, and the latest run of each check |
+| GET | `/api/admin/metrics?days=14` | Per day: requests, refusals, errors and latency from the request log; questions, tokens and estimated cost from the run log, by model and by person |
+| GET | `/api/admin/jobs` | The checks an admin can run, with their cost and latest run |
+| POST | `/api/admin/jobs/{job}/runs` | Start one, with `{"choices": {...}}` from its fixed list. 409 while another runs |
+| GET | `/api/admin/runs`, `/runs/{id}`, `/runs/{id}/stream` | History, one run with its output, and its output live as server-sent events |
+| POST | `/api/admin/runs/{id}/cancel` | Stop a running check |
+| GET, PATCH, POST | `/api/admin/users`, `/users/{id}`, `/users/{id}/reset-password` | List accounts; change a role or disable; set a temporary password |
+| GET, PATCH | `/api/admin/settings` | Whether anyone may sign up |
+
+The checks are fixed commands in `sql_agent/jobs.py`: the unit tests, the security
+catalogue, the semantic layer, the dry-run evaluation, the setup check with one tiny model
+call, a ping of every model, and the live evaluation. The live evaluation is off unless
+`SQL_AGENT_ADMIN_LIVE_EVAL=1`.
+
 ### Accounts, access and limits
 
 People sign in with an account (ADR 0006), by email and password or with Google (ADR 0007).
@@ -350,6 +370,7 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/auth.py`, `account_routes.py` | The session cookie, the cross-site check, the sign-in throttle, and the account routes. |
 | `sql_agent/google_login.py` | Google sign-in and the rules for linking an account (ADR 0007). |
 | `sql_agent/users.py` | Manage accounts from the command line. |
+| `sql_agent/admin_routes.py`, `jobs.py`, `metrics.py` | The admin console's routes, its fixed checks and their runner, and figures read from the logs. |
 | `sql_agent/conversations.py` | Stores conversations in SQLite: every answer for the interface, and the recent turns a follow-up is shown. |
 | `sql_agent/limits.py` | Concurrency and token budgets for the service. |
 | `sql_agent/requestlog.py` | Logs each HTTP request. |
