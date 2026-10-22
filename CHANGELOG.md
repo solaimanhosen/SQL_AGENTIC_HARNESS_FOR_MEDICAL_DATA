@@ -4,7 +4,7 @@ Notable changes to this project, newest first. Versions follow the project miles
 v1 is the backend, v2 adds the web interface, v3 adds analytics, charts and reports, and
 v4 adds the model picker, accounts, the admin console and a redesigned interface.
 
-## v4.0.0 — 22 October 2026
+## v4.0.0 — 21 October 2026
 
 The interface is redesigned. People choose the model and effort for each question, sign in
 with an account or Google and see only their own conversations, and admins get a console

@@ -413,7 +413,7 @@ Work is on the branch `sql_agent/platform/dev`, cut from `main` at `004d106`.
 | 22 | Admin console: the page | Done | `f5bbf01` |
 | 23 | Stop, polish, browser checks, records, merge and v4.0.0 | Done | this step's commit and the merge |
 
-Merged into `main` with `--no-ff` and tagged v4.0.0 on 22 October 2026.
+Merged into `main` with `--no-ff` and tagged v4.0.0 on 21 October 2026.
 
 ## Results
 
