@@ -74,6 +74,16 @@ Built on `sql_agent/platform/dev`. The record is `Documents/platform-and-account
 - `GET /api/account/usage`.
 - A new chat starts on your default model. A person's daily budget is rebuilt from the
   stored answers, so a restart no longer resets it.
+- The admin console's service (ADR 0008):
+  - **Overview:** status, accounts, budgets, and the latest checks.
+  - **Metrics:** read from the request and run logs.
+  - **Checks:** seven fixed jobs (unit tests, security catalogue, semantic layer, dry-run
+    and live evaluation, setup, ping every model), one at a time, with live output and
+    history.
+  - **People:** account management, including temporary passwords.
+  - **Settings:** the registration switch.
+- Schema version 5: `check_runs`. `SQL_AGENT_ADMIN_LIVE_EVAL` allows the paid live
+  evaluation from the console.
 - Schema version 4: users, sessions, pending Google sign-ins and settings in the application
   database, now opened by `appdb.py`.
 - Schema versions for `data/conversations.db`. A v3 file upgrades in place when opened, and a
