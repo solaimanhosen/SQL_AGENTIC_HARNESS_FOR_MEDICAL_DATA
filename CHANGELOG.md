@@ -121,7 +121,7 @@ the decisions are ADRs 0005 to 0008.
   returning focus to the button that opened it.
 - When the service cannot be reached, the message no longer tells users to run a command.
 - The initial bundle's warning budget is 600 kB instead of 500 kB: the router, CDK menus and
-  dialogs bring it to about 505 kB, 112 kB transferred. The error limit stays at 1 MB.
+  dialogs bring it to about 593 kB, 125 kB transferred. The error limit stays at 1 MB.
 
 ## v3.0.0 — 21 October 2026
 
