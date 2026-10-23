@@ -108,15 +108,19 @@ for `localhost`; set it to `false` for plain HTTP on this machine.
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/health` | Whether the database is readable, the model and the as-of date. No model call. No session needed. |
-| GET | `/api/auth/config` | Whether registration is open and Google sign-in is on. No session needed. |
+| GET | `/api/auth/config` | Whether registration is open, and whether Google sign-in and email are on. No session needed. |
 | POST | `/api/auth/register` | `{email, password, name}`: make an account and sign in. 403 when registration is closed, 409 when the email is taken. |
 | POST | `/api/auth/login` | `{email, password}`: sign in. A wrong password and an unknown email get the same 401. Throttled. |
 | POST | `/api/auth/logout` | End this session. |
 | GET | `/api/auth/me` | The signed-in person: email, name, role, sign-in methods, default model. |
+| POST | `/api/auth/forgot` | `{email}`: email a reset link if an enabled account uses it. Always 202 with the same body; 503 when email is off. Limited per email and address. |
+| POST | `/api/auth/reset` | `{token, password}`: set a password from a reset link and end every session. 400 `invalid_link` when it is expired or used. |
+| POST | `/api/auth/verify` | `{token}`: confirm an email from a confirmation link. No session needed. |
 | GET | `/api/auth/google/start`, `/callback` | Sign in with Google, or `?link=true` to connect it to the signed-in account. See ADR 0007. |
 | PATCH | `/api/account` | Change your name, or default model and effort. |
 | POST | `/api/account/password` | `{current, new}`: change your password. |
 | GET, DELETE, POST | `/api/account/sessions`, `/{id}`, `/revoke-others` | List your sessions and sign them out. |
+| POST | `/api/account/verify-email` | Send yourself another confirmation link. 409 when already confirmed. |
 | POST | `/api/account/google/disconnect` | Disconnect Google; refused for an account with no password. |
 | GET | `/api/account/usage` | Your tokens today against your daily budget, and this month's questions, tokens and estimated cost by model. |
 | GET | `/api/schema` | The documented tables and columns. Identity columns never appear. |
@@ -226,6 +230,19 @@ To switch on Google sign-in, create an OAuth client of type Web application in G
 Console with the redirect URI `<SQL_AGENT_PUBLIC_URL>/api/auth/google/callback`, which is
 `http://localhost:4200/api/auth/google/callback` in development, and set
 `SQL_AGENT_GOOGLE_CLIENT_ID` and `SQL_AGENT_GOOGLE_CLIENT_SECRET` in `Backend/.env`.
+
+To switch on email, for "Forgot password?" and confirmation links (ADR 0009), fill in the
+`SQL_AGENT_SMTP_*` settings and `SQL_AGENT_MAIL_FROM` in `Backend/.env`. Any SMTP provider
+works. For Gmail, turn on 2-Step Verification, make an app password, and send from the same
+address. Then check it:
+
+```bash
+.venv/bin/python -m sql_agent.mailer you@example.org   # sends one test message
+.venv/bin/python -m sql_agent.check_setup              # signs in to the mail server too
+```
+
+A reset link works once, for 30 minutes, and signs out every browser on the account. A
+confirmation link lasts 3 days. Without email settings, an admin resets forgotten passwords.
 
 A question is refused with a 429, before the model is called, when:
 - too many are already running (`too_many_runs`, with a `Retry-After` header);
@@ -348,6 +365,9 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `SQL_AGENT_USER_DAILY_TOKEN_BUDGET` | `1000000` | Model tokens one person may spend per UTC day. |
 | `SQL_AGENT_PUBLIC_URL` | `http://localhost:4200` | The address people open. Google returns them here. |
 | `SQL_AGENT_GOOGLE_CLIENT_ID`, `_SECRET` | none | Google sign-in, off unless both are set. The secret is never logged; never commit it. |
+| `SQL_AGENT_SMTP_HOST`, `_USERNAME`, `_PASSWORD` | none | The mail server and its sign-in. Email is off unless these and `SQL_AGENT_MAIL_FROM` are set. The password is never logged; never commit it. |
+| `SQL_AGENT_SMTP_PORT` | `587` | 587 for STARTTLS, 465 for TLS from the start. |
+| `SQL_AGENT_MAIL_FROM` | none | The sender, such as `Patient data questions <you@gmail.com>`. |
 | `SQL_AGENT_MAX_CONCURRENT_RUNS` | `4` | Questions the service answers at once. More are refused. |
 | `SQL_AGENT_DAILY_TOKEN_BUDGET` | `5000000` | Model tokens the service may spend per UTC day. |
 | `SQL_AGENT_CONVERSATION_TOKEN_BUDGET` | `1000000` | Model tokens one conversation may spend. |
@@ -370,6 +390,7 @@ All settings are optional environment variables, read from the shell or from `Ba
 | `sql_agent/accounts.py`, `passwords.py` | Accounts, sessions and pending Google sign-ins; scrypt password hashing. |
 | `sql_agent/auth.py`, `account_routes.py` | The session cookie, the cross-site check, the sign-in throttle, and the account routes. |
 | `sql_agent/google_login.py` | Google sign-in and the rules for linking an account (ADR 0007). |
+| `sql_agent/mailer.py` | Sends reset and confirmation links over SMTP, and a test message (ADR 0009). |
 | `sql_agent/users.py` | Manage accounts from the command line. |
 | `sql_agent/admin_routes.py`, `jobs.py`, `metrics.py` | The admin console's routes, its fixed checks and their runner, and figures read from the logs. |
 | `sql_agent/conversations.py` | Stores conversations in SQLite: every answer for the interface, and the recent turns a follow-up is shown. |

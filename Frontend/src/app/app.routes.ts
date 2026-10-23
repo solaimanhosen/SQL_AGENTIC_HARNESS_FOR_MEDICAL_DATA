@@ -35,6 +35,24 @@ export const routes: Routes = [
     title: 'Create an account · Patient data questions',
   },
   {
+    path: 'forgot-password',
+    // The pages a link in an email opens are loaded only then.
+    loadComponent: () => import('./auth/email-pages').then((module) => module.ForgotPasswordPage),
+    canActivate: [signedOutGuard],
+    title: 'Reset your password · Patient data questions',
+  },
+  {
+    // No guard: the link may be opened in a browser signed in to some account.
+    path: 'reset-password',
+    loadComponent: () => import('./auth/email-pages').then((module) => module.ResetPasswordPage),
+    title: 'Choose a new password · Patient data questions',
+  },
+  {
+    path: 'verify-email',
+    loadComponent: () => import('./auth/email-pages').then((module) => module.VerifyEmailPage),
+    title: 'Confirm your email · Patient data questions',
+  },
+  {
     path: 'account',
     // Loaded only when opened, so the chat's first load stays small.
     loadComponent: () => import('./account/account-page').then((module) => module.AccountPage),

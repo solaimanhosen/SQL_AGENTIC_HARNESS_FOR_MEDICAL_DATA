@@ -4,6 +4,41 @@ Notable changes to this project, newest first. Versions follow the project miles
 v1 is the backend, v2 adds the web interface, v3 adds analytics, charts and reports, and
 v4 adds the model picker, accounts, the admin console and a redesigned interface.
 
+## v4.1.0 — unreleased
+
+Forgotten passwords are reset by email, and addresses can be confirmed. The design is
+decision record 0009, and `Documents/platform-and-accounts.md` records the checks.
+
+### Added
+
+- "Forgot password?" on the sign-in page, shown when email is set up. It asks for an email
+  and always answers the same way; if an account uses it, a reset link arrives. The link
+  works once, for 30 minutes, and saving a new password there signs out every browser on the
+  account.
+- A confirmation link sent when someone signs up, and a reminder on the account page with a
+  button to send another. Confirming is optional. A confirmed email lets Google sign-in reach
+  the account by its address.
+- Three pages, loaded only when opened: `/forgot-password`, `/reset-password` and
+  `/verify-email`. The token travels in the link's fragment, and the page removes it from the
+  address once read.
+- `POST /api/auth/forgot`, `/api/auth/reset`, `/api/auth/verify` and
+  `/api/account/verify-email`. Requests for links are limited per email and per address.
+- Email over plain SMTP, so any provider works: `SQL_AGENT_SMTP_HOST`, `_PORT`, `_USERNAME`,
+  `_PASSWORD` and `SQL_AGENT_MAIL_FROM`. Email is off until they are set.
+- `python -m sql_agent.mailer ADDRESS` sends a test message. `check_setup` signs in to the
+  mail server, and the service's startup line and the console's overview say whether email
+  is on.
+- `email_verified` on accounts, and `email_enabled` in `/api/auth/config`.
+- Schema version 6: `email_tokens`, holding only each token's hash. Files at version 5
+  upgrade in place.
+
+### Changed
+
+- Changing a password, or an admin resetting it, voids any reset link still outstanding.
+- The sign-in pages share one frame, `auth/auth-shell.ts`, and one stylesheet.
+- The test suite blanks the Google and mail settings, so a filled-in `.env` can never reach a
+  real service from it.
+
 ## v4.0.0 — 21 October 2026
 
 The interface is redesigned. People choose the model and effort for each question, sign in

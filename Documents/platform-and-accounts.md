@@ -726,17 +726,51 @@ and were not run again.
 | Backend tests, no network | 519 passed, 3 skipped | 522 passed, 3 skipped |
 | Interface tests, no network | 180 passed | 188 passed |
 
+## After v4.0.0: password reset by email
+
+Built on 22 October 2026 on `sql_agent/email/dev`, to close the second open item. The design
+is ADR 0009.
+
+- **Forgot password.** "Forgot password?" on the sign-in page asks for an email and always
+  answers the same way. If an account uses it, a link arrives that works once, for 30
+  minutes. Choosing a new password there signs out every browser on the account.
+- **Confirming an email.** Signing up sends a confirmation link. Until it is opened, the
+  account page shows a reminder with a button to send another. Confirming is optional; it
+  lets Google sign-in reach the account by its email.
+- **Any provider.** Mail goes over plain SMTP from five settings in `Backend/.env`, so Gmail
+  with an app password works today (free, no domain), and Brevo, Resend or Amazon SES on a
+  domain later, with no code change. With the settings empty, email is off and the link is
+  not shown.
+- **Checks.** `python -m sql_agent.mailer ADDRESS` sends a test message. `check_setup` signs
+  in to the mail server, and the console's overview and the startup line say whether email
+  is on.
+
+| Check | v4.0.0 | With email links |
+|---|---|---|
+| Backend tests, no network | 522 passed, 3 skipped | 558 passed, 3 skipped |
+| Interface tests, no network | 188 passed | 202 passed |
+| Security catalogue | 78 of 78 | 78 of 78 |
+| Application database schema | 5 | 6, with `email_tokens` |
+| First load, transferred | 125 kB | 128 kB; the three new pages (3 kB) load when opened |
+
+In headless Chrome, against a scratch service whose mailer wrote to a file instead of
+sending:
+- Signing up sent a confirmation link, and the account page showed the reminder.
+- Opening the link confirmed the email, removed the token from the address, and the
+  reminder went away.
+- A reset link changed the password, signed out a second browser, and refused a second use.
+- No page scrolled sideways at 360 or 1280 pixels, in either theme.
+
 ## Open items
 
 - **Google sign-in has not been tried with a real Google account.**
   - The whole flow is tested against a fake Google, and the redirect to Google was checked
     in a browser.
   - A live sign-in waits for an OAuth client in Google Cloud Console.
-- **Password reset by email is not built.**
-  - A forgotten password is reset by an admin, from the command line now and from the
-    admin console after Step 22.
-  - Reset links need an email provider, which is still to be chosen. That would also bring
-    email verification.
+- **Email has not been sent through a real mail server yet.**
+  - Everything is tested with a stand-in mailer, and the flow was checked in a browser.
+  - A live check waits for a mailbox and its app password in `Backend/.env`. Until then a
+    forgotten password is reset by an admin, from the command line or the console.
 
 ## Demo notes
 

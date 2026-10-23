@@ -140,6 +140,8 @@ export interface AuthUser {
   role: 'user' | 'admin';
   has_password: boolean;
   google_linked: boolean;
+  /** Confirmed by Google, by an admin, or by opening a link sent to it. */
+  email_verified: boolean;
   default_model: string | null;
   default_effort: Effort | null;
 }
@@ -190,6 +192,8 @@ export interface MyUsage {
 export interface AuthConfig {
   registration_open: boolean;
   google_enabled: boolean;
+  /** Whether reset and confirmation links can be sent by email. */
+  email_enabled: boolean;
 }
 
 /** One model the agent may run on, as /api/models describes it. */

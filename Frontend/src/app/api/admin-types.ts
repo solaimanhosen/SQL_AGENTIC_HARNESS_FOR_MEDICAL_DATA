@@ -58,6 +58,7 @@ export interface AdminOverview {
   default_model: string;
   default_effort: string;
   google_enabled: boolean;
+  email_enabled: boolean;
   registration_open: boolean;
   people: { accounts: number; admins: number; disabled: number };
   conversations: { conversations: number; questions: number };
