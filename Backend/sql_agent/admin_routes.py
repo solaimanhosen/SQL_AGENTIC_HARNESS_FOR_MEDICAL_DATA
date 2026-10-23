@@ -66,6 +66,7 @@ def admin_router(
     sessions: Sessions,
     jobs: JobRunner,
     google_enabled: bool,
+    email_enabled: bool = False,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/admin", dependencies=[Depends(sessions.admin)])
     started = time.monotonic()
@@ -92,6 +93,7 @@ def admin_router(
             "default_model": settings.model,
             "default_effort": settings.effort,
             "google_enabled": google_enabled,
+            "email_enabled": email_enabled,
             "registration_open": registration_open(),
             "people": {
                 "accounts": len(users),

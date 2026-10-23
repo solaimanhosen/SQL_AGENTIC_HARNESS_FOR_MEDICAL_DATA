@@ -119,7 +119,7 @@ CSRF = {"X-Requested-With": "sql-agent"}
 
 def _client(settings, db, *, conversations=None, limits=None, signed_in=True, admin=False, **kwargs):
     agent = StubAgent(settings, db, **kwargs)
-    client = TestClient(create_app(agent, conversations, limits=limits, google=None), headers=CSRF)
+    client = TestClient(create_app(agent, conversations, limits=limits, google=None, mailer=None), headers=CSRF)
     if signed_in:
         _sign_in(client, admin=admin)
     return client, agent
@@ -426,7 +426,11 @@ def test_every_endpoint_but_health_and_signing_in_needs_a_session(settings, db, 
 def test_health_and_the_sign_in_page_s_settings_stay_open(settings, db):
     client, _ = _client(settings, db, signed_in=False)
     assert client.get("/api/health").status_code == 200
-    assert client.get("/api/auth/config").json() == {"registration_open": True, "google_enabled": False}
+    assert client.get("/api/auth/config").json() == {
+        "registration_open": True,
+        "google_enabled": False,
+        "email_enabled": False,
+    }
 
 
 def test_a_request_that_changes_something_must_come_from_the_application(settings, db):

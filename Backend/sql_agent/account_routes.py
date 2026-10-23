@@ -1,22 +1,25 @@
-"""The HTTP routes for accounts: signing up and in, Google sign-in, and a person's own settings.
+"""The HTTP routes for accounts: signing up and in, Google sign-in, links sent by email, and a
+person's own settings.
 
 They sit beside the routes in service.py, which build them with the same stores. Errors use
 the service's usual body, `{error, message}`. Sign-in failures never say whether the email
-exists, and Google failures reach the login page as a short code only.
+exists, and neither does asking for a reset link. Google failures reach the login page as a
+short code only.
 """
 
 from __future__ import annotations
 
+import logging
 import secrets
 from dataclasses import asdict
 from datetime import datetime, timezone
 
 import anyio
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from .accounts import MAX_EMAIL_CHARS, MAX_NAME_CHARS, AccountError, AccountStore, User
+from .accounts import EMAIL_TOKEN_LIFETIMES, MAX_EMAIL_CHARS, MAX_NAME_CHARS, AccountError, AccountStore, User
 from .auth import SESSION_COOKIE, Sessions, SignInThrottle, clear_session_cookie, set_session_cookie
 from .config import Settings
 from .google_login import (
@@ -32,8 +35,12 @@ from .google_login import (
 )
 from .conversations import ConversationStore
 from .limits import SpendingLimits
+from .mailer import Mailer, reset_message, verify_message
 from .models import ModelChoiceError, find_model, resolve_choice
 from .passwords import MAX_PASSWORD_CHARS
+
+log = logging.getLogger(__name__)
+MAX_TOKEN_CHARS = 200
 
 
 class UserOut(BaseModel):
@@ -43,6 +50,7 @@ class UserOut(BaseModel):
     role: str
     has_password: bool
     google_linked: bool
+    email_verified: bool
     default_model: str | None
     default_effort: str | None
 
@@ -50,6 +58,8 @@ class UserOut(BaseModel):
 class AuthConfigOut(BaseModel):
     registration_open: bool
     google_enabled: bool
+    email_enabled: bool
+    """Whether reset and confirmation links can be sent."""
 
 
 class RegisterRequest(BaseModel):
@@ -61,6 +71,19 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str = Field(min_length=1, max_length=MAX_EMAIL_CHARS)
     password: str = Field(min_length=1, max_length=MAX_PASSWORD_CHARS)
+
+
+class ForgotRequest(BaseModel):
+    email: str = Field(min_length=1, max_length=MAX_EMAIL_CHARS)
+
+
+class ResetRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=MAX_TOKEN_CHARS)
+    password: str = Field(min_length=1, max_length=MAX_PASSWORD_CHARS)
+
+
+class VerifyRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=MAX_TOKEN_CHARS)
 
 
 class AccountUpdate(BaseModel):
@@ -120,6 +143,7 @@ def user_out(user: User) -> UserOut:
         role=user.role,
         has_password=user.has_password,
         google_linked=user.google_linked,
+        email_verified=user.email_verified,
         default_model=user.default_model,
         default_effort=user.default_effort,
     )
@@ -135,9 +159,12 @@ def account_router(
     throttle: SignInThrottle,
     limits: SpendingLimits,
     conversations: ConversationStore,
+    mailer: Mailer | None,
+    email_throttle: SignInThrottle,
 ) -> APIRouter:
     router = APIRouter()
     secure = settings.secure_cookies
+    public_url = settings.public_url.rstrip("/")
 
     def registration_open() -> bool:
         return accounts.registration_open(default=settings.registration_open)
@@ -148,17 +175,81 @@ def account_router(
         request.state.user_id = user.id
         return user_out(user)
 
+    def require_mail() -> Mailer:
+        if mailer is None:
+            raise AccountError("email_off", "Email is not set up here. Ask an administrator to reset your password.")
+        return mailer
+
+    def count_email_request(request: Request, email: str) -> None:
+        """Every request counts, sent or not, so the limit says nothing about which emails exist."""
+        address = request.client.host if request.client else "unknown"
+        email_throttle.check(address, email)
+        email_throttle.failed(address, email)
+
+    def send_link(background: BackgroundTasks, user: User, purpose: str) -> None:
+        """Make a link and send it after the response, so how long sending takes is not seen."""
+        sender = require_mail()
+        token = accounts.issue_email_token(user.id, purpose)
+        lifetime = EMAIL_TOKEN_LIFETIMES[purpose]
+        if purpose == "reset":
+            subject, text = reset_message(
+                user.email, f"{public_url}/reset-password#token={token}", int(lifetime.total_seconds() // 60)
+            )
+        else:
+            subject, text = verify_message(user.email, f"{public_url}/verify-email#token={token}", lifetime.days)
+        background.add_task(deliver, sender, user.email, subject, text, purpose)
+
     @router.get("/api/auth/config")
     def auth_config() -> AuthConfigOut:
         """What the sign-in page should offer."""
-        return AuthConfigOut(registration_open=registration_open(), google_enabled=google is not None)
+        return AuthConfigOut(
+            registration_open=registration_open(), google_enabled=google is not None, email_enabled=mailer is not None
+        )
 
     @router.post("/api/auth/register", status_code=201)
-    def register(body: RegisterRequest, request: Request, response: Response) -> UserOut:
+    def register(
+        body: RegisterRequest, request: Request, response: Response, background: BackgroundTasks
+    ) -> UserOut:
         if not registration_open():
             raise AccountError("registration_closed", "New accounts are not being accepted.")
         user = accounts.create_user(body.email, password=body.password, name=body.name)
+        if mailer is not None:
+            send_link(background, user, "verify")
         return signed_in(response, user, request)
+
+    @router.post("/api/auth/forgot", status_code=202)
+    def forgot_password(body: ForgotRequest, request: Request, background: BackgroundTasks) -> dict:
+        """Email a reset link, if an enabled account has this email. The answer is the same either way."""
+        require_mail()
+        count_email_request(request, body.email)
+        user = accounts.find_by_email(body.email)
+        if user is not None and not user.disabled:
+            send_link(background, user, "reset")
+        return {"accepted": True}
+
+    @router.post("/api/auth/reset", status_code=204)
+    def reset_password(body: ResetRequest) -> Response:
+        """Choose a new password with the token from a reset link. Every session of the account ends."""
+        accounts.use_reset_token(body.token, body.password)
+        return Response(status_code=204)
+
+    @router.post("/api/auth/verify", status_code=204)
+    def verify_email(body: VerifyRequest) -> Response:
+        """Confirm an email with the token from a confirmation link. No sign-in is needed."""
+        accounts.use_verify_token(body.token)
+        return Response(status_code=204)
+
+    @router.post("/api/account/verify-email", status_code=202)
+    def send_verification(
+        request: Request, background: BackgroundTasks, user: User = Depends(sessions.current)
+    ) -> dict:
+        """Send, or send again, the link that confirms your email."""
+        require_mail()
+        if user.email_verified:
+            raise AccountError("already_verified", "Your email is already confirmed.")
+        count_email_request(request, user.email)
+        send_link(background, user, "verify")
+        return {"accepted": True}
 
     @router.post("/api/auth/login")
     def login(body: LoginRequest, request: Request, response: Response) -> UserOut:
@@ -327,4 +418,12 @@ def account_router(
         return response
 
     return router
+
+
+def deliver(mailer: Mailer, to: str, subject: str, text: str, purpose: str) -> None:
+    """Send one message after the response. A failure is logged without the link, never raised."""
+    try:
+        mailer.send(to, subject, text)
+    except Exception as exc:  # noqa: BLE001  (nobody is waiting on a background task)
+        log.warning("Could not send the %s email: %s", purpose, exc)
 

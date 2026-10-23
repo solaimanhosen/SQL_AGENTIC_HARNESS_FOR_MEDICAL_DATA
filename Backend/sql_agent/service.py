@@ -62,6 +62,7 @@ from .conversations import (
     UnknownConversation,
 )
 from .limits import LimitExceeded, Reservation, SpendingLimits
+from .mailer import Mailer, load_mailer
 from .models import ModelChoiceError, available_models, resolve_choice
 from .requestlog import RequestLogMiddleware
 from .payload import AnswerOut, DefinitionOut, answer_payload, definition_payload
@@ -207,7 +208,7 @@ class UsageOut(BaseModel):
 HTTP_ERROR_KINDS = {404: "not_found", 405: "method_not_allowed", 413: "too_large"}
 
 
-# Read Google's client from the environment unless a test passes one, or None for off.
+# Read Google's client and the mailer from the environment unless a test passes them, or None for off.
 FROM_ENVIRONMENT = object()
 
 JOB_ERROR_STATUS = {
@@ -220,7 +221,10 @@ JOB_ERROR_STATUS = {
 }
 
 ACCOUNT_ERROR_STATUS = {
+    "already_verified": 409,
+    "email_off": 503,
     "email_taken": 409,
+    "invalid_link": 400,
     "registration_closed": 403,
     "wrong_password": 403,
     "unknown_session": 404,
@@ -237,6 +241,8 @@ def create_app(
     google: GoogleConfig | None | object = FROM_ENVIRONMENT,
     token_exchange: TokenExchange = exchange_code,
     throttle: SignInThrottle | None = None,
+    mailer: Mailer | None | object = FROM_ENVIRONMENT,
+    email_throttle: SignInThrottle | None = None,
     jobs: JobRunner | None = None,
 ) -> FastAPI:
     """Build the service around one agent, which is safe to share between requests.
@@ -251,6 +257,8 @@ def create_app(
     accounts = AccountStore(conversations.database) if accounts is None else accounts
     if google is FROM_ENVIRONMENT:
         google = load_google_config(agent.settings.public_url)
+    if mailer is FROM_ENVIRONMENT:
+        mailer = load_mailer()
     sessions = Sessions(accounts)
     limits = SpendingLimits.from_settings(agent.settings) if limits is None else limits
     jobs = JobRunner(conversations.database) if jobs is None else jobs
@@ -311,9 +319,9 @@ def create_app(
         return _error(403, "forbidden", "This needs an administrator.")
 
     @app.exception_handler(Throttled)
-    async def throttled(request: Request, _: Throttled) -> JSONResponse:
+    async def throttled(request: Request, exc: Throttled) -> JSONResponse:
         request.state.refused = "too_many_attempts"
-        response = _error(429, "too_many_attempts", "Too many failed sign-ins. Wait a few minutes and try again.")
+        response = _error(429, "too_many_attempts", exc.message)
         response.headers["Retry-After"] = "600"
         return response
 
@@ -532,6 +540,13 @@ def create_app(
             throttle=throttle or SignInThrottle(),
             limits=limits,
             conversations=conversations,
+            mailer=mailer,
+            email_throttle=email_throttle
+            or SignInThrottle(
+                per_address=10,
+                per_email=3,
+                message="Too many emails asked for. Wait a few minutes, and check your spam folder.",
+            ),
         )
     )
     app.include_router(
@@ -543,6 +558,7 @@ def create_app(
             sessions=sessions,
             jobs=jobs,
             google_enabled=google is not None,
+            email_enabled=mailer is not None,
         )
     )
     app.state.accounts = accounts

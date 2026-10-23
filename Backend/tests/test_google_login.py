@@ -194,7 +194,7 @@ def google_app(sample_db_path):
     settings = dataclasses.replace(load_settings({}), conversations_path=None, request_log_path=None, secure_cookies=False)
     fake = FakeGoogle()
     agent = SimpleNamespace(settings=settings, db=None, layer=load_semantic_layer(), as_of=date(2026, 8, 16))
-    app = create_app(agent, google=CONFIG, token_exchange=fake)
+    app = create_app(agent, google=CONFIG, mailer=None, token_exchange=fake)
     return app, fake
 
 
@@ -265,7 +265,7 @@ def test_connecting_google_from_a_signed_in_account(google_app):
 def test_google_sign_in_is_off_without_credentials(sample_db_path):
     settings = dataclasses.replace(load_settings({}), conversations_path=None, request_log_path=None, secure_cookies=False)
     agent = SimpleNamespace(settings=settings, db=None, layer=load_semantic_layer(), as_of=date(2026, 8, 16))
-    client = TestClient(create_app(agent, google=None), headers=CSRF)
+    client = TestClient(create_app(agent, google=None, mailer=None), headers=CSRF)
     assert client.get("/api/auth/config").json()["google_enabled"] is False
     assert _start(client).headers["location"] == "/login?error=google_off"
 

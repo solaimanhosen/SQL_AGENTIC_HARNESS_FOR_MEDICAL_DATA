@@ -29,7 +29,7 @@ def _job(job_id, code, **kwargs):
 def admin(settings, db):
     """A signed-in admin's client, on a service whose jobs only print."""
     agent = StubAgent(settings, db)
-    app = create_app(agent, google=None)
+    app = create_app(agent, google=None, mailer=None)
     app.state.jobs.jobs = {
         job.id: job
         for job in (
