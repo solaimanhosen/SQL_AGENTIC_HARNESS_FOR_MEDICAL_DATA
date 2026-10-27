@@ -4,7 +4,7 @@ Notable changes to this project, newest first. Versions follow the project miles
 v1 is the backend, v2 adds the web interface, v3 adds analytics, charts and reports, and
 v4 adds the model picker, accounts, the admin console and a redesigned interface.
 
-## v4.1.0 — unreleased
+## v4.1.0 — 27 October 2026
 
 Forgotten passwords are reset by email, and addresses can be confirmed. The design is
 decision record 0009, and `Documents/platform-and-accounts.md` records the checks.
