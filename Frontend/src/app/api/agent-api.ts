@@ -71,6 +71,26 @@ export class AgentApi {
     return this.postAuth('/auth/register', { email, password, name });
   }
 
+  /** Ask for a reset link. The service answers the same whether or not the account exists. */
+  async forgotPassword(email: string): Promise<void> {
+    await this.postQuiet('/auth/forgot', { email });
+  }
+
+  /** Choose a new password with the token from a reset link. */
+  async resetPassword(token: string, password: string): Promise<void> {
+    await this.postQuiet('/auth/reset', { token, password });
+  }
+
+  /** Confirm an email with the token from a confirmation link. No sign-in is needed. */
+  async verifyEmail(token: string): Promise<void> {
+    await this.postQuiet('/auth/verify', { token });
+  }
+
+  /** Send the signed-in person the link that confirms their email. */
+  async sendVerification(): Promise<void> {
+    await this.request('/account/verify-email', { method: 'POST' });
+  }
+
   async logout(): Promise<void> {
     await this.request('/auth/logout', { method: 'POST' }, { quiet: true });
   }
@@ -120,6 +140,19 @@ export class AgentApi {
       body: body ? JSON.stringify(body) : undefined,
     });
     return (await response.json()) as T;
+  }
+
+  /** Post JSON from a page anyone may open, where a 401 is not an ended session. */
+  private async postQuiet(path: string, body: object): Promise<Response> {
+    return this.request(
+      path,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+      { quiet: true },
+    );
   }
 
   private async postAuth(path: string, body: object): Promise<AuthUser> {

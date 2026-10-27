@@ -32,7 +32,8 @@ Google client ID and secret are configured.
    2. From Account settings, while signed in, Google is connected to the current account,
       unless another account has it.
    3. An account with the same email is linked only if its email is verified: made by an
-      admin from the command line, or linked to Google before.
+      admin from the command line, linked to Google before, or, since ADR 0009, confirmed
+      or reset through a link sent to it.
    4. Otherwise a new account is made with a verified email and no password. That happens
       only while registration is open.
 5. **Failures.** Every failure returns to the login page with a short code. Details stay in

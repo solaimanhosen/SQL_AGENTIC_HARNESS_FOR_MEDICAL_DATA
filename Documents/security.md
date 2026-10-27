@@ -49,7 +49,9 @@ Four inputs are assumed hostile, whatever they look like:
 | One person reading or changing another's conversations | Every conversation query is filtered by its owner. Another person's conversation is answered exactly like one that does not exist (404), for reading, renaming, pinning, deleting, stopping, reports and follow-up questions. The cap on stored conversations is per owner, so nobody's use evicts anyone else's | A service test in which a second user tries each of those on the first user's conversation, and store tests of ownership and per-owner eviction |
 | A request forged from another site | A request that changes something must carry `X-Requested-With: sql-agent`, which a page on another site cannot send without the CORS check passing, and any `Origin` it names must be allowed. The session cookie is SameSite=Strict as well | Tests that a request without the header, or from another origin, is refused with 403 even with a valid session, and a browser check of the same |
 | Guessing passwords | Passwords are hashed with scrypt (n = 2^15) and a per-user salt, and must be 12 to 128 characters. A wrong password and an unknown email get the same answer in the same time. Failed sign-ins are limited per address and per email over 10 minutes | Tests of the hash, the rules, the identical answers and the throttle |
-| Taking over an account through Google sign-in | The sign-in uses a one-time state bound to the browser by a cookie, a nonce and PKCE. The ID token's issuer, audience, expiry, nonce and verified email are checked. A Google identity is linked to an existing account only if its email was verified, by Google or by an admin, never to a self-registered one (ADR 0007). Where to return is limited to paths inside the application | Tests with a fake Google for a missing, mismatched, reused and expired state, each claim, linking rules, and unsafe return paths |
+| Taking over an account through Google sign-in | The sign-in uses a one-time state bound to the browser by a cookie, a nonce and PKCE. The ID token's issuer, audience, expiry, nonce and verified email are checked. A Google identity is linked to an existing account only if its email was verified, by Google, by an admin or through a link sent to it, never to an unconfirmed self-registered one (ADRs 0007, 0009). Where to return is limited to paths inside the application | Tests with a fake Google for a missing, mismatched, reused and expired state, each claim, linking rules, and unsafe return paths |
+| Taking over an account with a reset link | A link carries 32 random bytes, stored only as their hash, bound to one account and one purpose. It works once, for 30 minutes, and a newer link or any other password change voids it. A reset ends every session of the account and does not sign anyone in. The token is in the link's fragment, so no server or proxy log sees it (ADR 0009) | Tests of single use, expiry, purpose, replacement, voiding, disabled accounts, ended sessions, and that only the hash is stored |
+| Learning who has an account from the reset page | Asking for a reset link answers the same for a known, unknown, disabled or malformed email, and the message is sent after the response. Requests are limited to 3 per email and 10 per address in 10 minutes, counted whether or not anything was sent | Tests of the identical answers, that nothing is sent for an unknown or disabled account, and of the limit |
 | Expensive models picked by anyone | Admin-only models are refused to everyone else before anything runs | A service test that a user is refused Fable 5.1 and an admin is not |
 | Running commands through the admin console | Every check is a fixed list of arguments in `jobs.py`, run without a shell. The browser names a job and may add only a choice from a fixed list (a catalog model, an effort), checked before it becomes an argument. One job at a time, each with a time limit. The paid live evaluation is off unless switched on in `.env`. Every console route needs an admin's session and, for changes, the application header (ADR 0008) | Tests that a user gets 403 and a signed-out request 401 on every console route, that an unlisted choice is refused, that every real job is a fixed command, that the live evaluation is off by default, and that a run times out and can be cancelled |
 | An admin locking everyone out | An admin cannot demote or disable themselves, or remove the last enabled admin | Tests of each refusal |
@@ -105,10 +107,14 @@ a sign the source text had been tampered with.
   account has its own daily budget and the service's budget still caps the total, but a
   deployed instance should close registration (`python -m sql_agent.users registration
   closed`) or put the sign-up page behind something that knows its users.
-- **A self-registered email is not verified.** Nothing confirms that whoever registered an
-  address owns it. That is why Google sign-in never links to such an account (ADR 0007).
-  An email service would be needed to verify addresses and to reset forgotten passwords;
-  until then, an admin resets a password from the command line.
+- **Confirming an email is optional.** Signing up sends a confirmation link, but an
+  unconfirmed account works, so whoever registered an address may not own it. Google sign-in
+  never links to such an account until it is confirmed (ADRs 0007, 0009).
+- **The mailbox is the key to the account.** Whoever can read an account's email can reset
+  its password. The SMTP password in `.env` lets anyone holding it send mail as the service's
+  address; it should be an app password for a mailbox used only by the service. Without
+  email settings, an admin resets passwords from the command line or the console.
+- **The email limit lives in memory**, like the sign-in throttle: a restart resets it.
 - **The sign-in throttle lives in memory.** A restart resets it, and several processes would
   each keep their own. It slows guessing; it is not a lockout.
 - **The service speaks plain HTTP.** Session cookies are marked Secure by default, which
@@ -171,5 +177,5 @@ a sign the source text had been tampered with.
    specific to the tables it names.
 3. Decide on a minimum group size for reported results, for answers, analyses and reports
    alike, and whether reports may carry rows at all.
-4. Serve over HTTPS, close open registration or add email verification, and review the
+4. Serve over HTTPS, close open registration or require confirmed emails, and review the
    daily budgets against the models' prices.

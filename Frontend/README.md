@@ -63,7 +63,9 @@ npx prettier --write "src/**/*.{ts,html,css}" # format
 | `src/app/ui/toasts.ts` | Short notices for failures that happen out of sight, such as a rename that could not be saved. |
 | `src/app/chat/model-picker.ts` | Two menus in the question box: the model, with its price and evaluation status, and the effort. The choice applies to the next question; a reopened conversation continues on its latest answer's model. |
 | `src/app/auth/auth.ts` | Who is signed in, the guards for the chat and the sign-in pages, and the messages for Google sign-in codes. |
-| `src/app/auth/auth-page.ts` | Sign in and create an account: email and password, and "Continue with Google" when the service offers it. |
+| `src/app/auth/auth-page.ts` | Sign in and create an account: email and password, "Continue with Google" when the service offers it, and "Forgot password?" when it can send email. |
+| `src/app/auth/auth-shell.ts`, `auth-form.css` | The frame and styles every signed-out page shares. |
+| `src/app/auth/email-pages.ts` | The pages links in emails open, loaded only then: `/forgot-password`, `/reset-password` and `/verify-email`. The token is read from the fragment and removed from the address. |
 | `src/app/ui/profile-menu.ts` | The avatar in the header: who is signed in, Account settings, and Sign out. |
 | `src/app/admin/` | The admin console at `/admin?tab=`, for admins only and loaded only when opened: Overview (status tiles, today's budget, latest checks), Checks (run each fixed check, follow its output live, history), Monitoring (four daily charts from the logs, by model, by person, refusals), People (roles, disabling, temporary passwords), Settings (registration). Output and log text are shown as text, never HTML. |
 | `src/app/ui/page-shell.ts` | The frame shared by the account page and the admin console: back to the chat, a list of sections, the content. |

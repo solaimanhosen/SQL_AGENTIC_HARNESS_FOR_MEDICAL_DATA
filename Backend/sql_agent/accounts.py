@@ -1,12 +1,17 @@
 """User accounts, sign-in sessions and pending Google sign-ins, in the application database.
 
 Two roles exist: `user` and `admin`. An account has a password, a linked Google identity, or
-both. Its email counts as verified only when Google said so or an admin created it; that
-decides whether a Google sign-in may be linked to it (see ADR 0007).
+both. Its email counts as verified only when Google said so, an admin created it, or its
+owner opened a link sent to it; that decides whether a Google sign-in may be linked to it
+(see ADRs 0007 and 0009).
 
 A session is a random token held by the browser in an HttpOnly cookie. Only its SHA-256 is
 stored, so a copy of the database does not let anyone sign in. A session ends after 30 days
 unused or 90 days in all, when its user is disabled, or when it is revoked.
+
+A link sent by email carries a token of the same kind, again stored only as its hash. It
+works once, for one purpose, and only until it expires; a newer link for the same purpose
+replaces it.
 """
 
 from __future__ import annotations
@@ -30,6 +35,9 @@ SESSION_LIFETIME = timedelta(days=90)
 # Writing the time of every request would turn each read into a write.
 SESSION_TOUCH_EVERY = timedelta(minutes=5)
 OAUTH_STATE_LIFETIME = timedelta(minutes=10)
+# Short for a reset, since the link alone sets a password; longer for confirming an address.
+EMAIL_TOKEN_LIFETIMES = {"reset": timedelta(minutes=30), "verify": timedelta(days=3)}
+INVALID_LINK = "This link has expired or was already used. Ask for a new one."
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -205,6 +213,7 @@ class AccountStore:
             raise AccountError("wrong_password", "The current password is not correct.")
         with self._lock:
             self._db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(new), user_id))
+            self._void_email_tokens(user_id, "reset")
 
     def reset_password(self, user_id: str, new: str) -> None:
         """Set a password without the old one, for an admin. Every session of the user ends."""
@@ -213,6 +222,7 @@ class AccountStore:
             self._require(user_id)
             self._db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(new), user_id))
             self._db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            self._void_email_tokens(user_id, "reset")
 
     def set_role(self, user_id: str, role: str) -> User:
         if role not in ROLES:
@@ -350,6 +360,70 @@ class AccountStore:
         if now - datetime.fromisoformat(row["created_at"]) > OAUTH_STATE_LIFETIME:
             return None
         return OAuthState(row["nonce"], row["code_verifier"], row["next_path"], row["link_user_id"])
+
+    # Links sent by email ------------------------------------------------------------------
+
+    def issue_email_token(self, user_id: str, purpose: str) -> str:
+        """A token for a link that resets the password (`reset`) or confirms the email (`verify`).
+
+        Only the browser that opens the link sees the token; its hash is stored. An earlier
+        unused link for the same purpose stops working.
+        """
+        lifetime = EMAIL_TOKEN_LIFETIMES[purpose]
+        token = secrets.token_urlsafe(32)
+        now = self._now()
+        with self._lock:
+            self._require(user_id)
+            self._void_email_tokens(user_id, purpose)
+            # Expired links of anyone are cleared on the way.
+            self._db.execute("DELETE FROM email_tokens WHERE expires_at < ?", (now.isoformat(),))
+            self._db.execute(
+                "INSERT INTO email_tokens (token_hash, user_id, purpose, created_at, expires_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (_token_hash(token), user_id, purpose, now.isoformat(), (now + lifetime).isoformat()),
+            )
+        return token
+
+    def use_reset_token(self, token: str, new_password: str) -> User:
+        """Set a password from a reset link. Every session ends, and the email counts as verified.
+
+        Opening the link proves its reader holds the mailbox. A password that breaks the rules
+        is refused before the link is used, so the person can try again with the same link.
+        """
+        check_rules(new_password)
+        user = self._take_email_token(token, "reset")
+        with self._lock:
+            self._db.execute(
+                "UPDATE users SET password_hash = ?, email_verified = 1 WHERE id = ?",
+                (hash_password(new_password), user.id),
+            )
+            self._db.execute("DELETE FROM sessions WHERE user_id = ?", (user.id,))
+            return self._require(user.id)
+
+    def use_verify_token(self, token: str) -> User:
+        """Mark the email as verified, from a confirmation link."""
+        user = self._take_email_token(token, "verify")
+        with self._lock:
+            self._db.execute("UPDATE users SET email_verified = 1 WHERE id = ?", (user.id,))
+            return self._require(user.id)
+
+    def _take_email_token(self, token: str, purpose: str) -> User:
+        """The enabled account a link is for, with the link removed so it works only once."""
+        now = self._now()
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM email_tokens WHERE token_hash = ? AND purpose = ?", (_token_hash(token), purpose)
+            ).fetchone()
+            if row is not None:
+                self._db.execute("DELETE FROM email_tokens WHERE token_hash = ?", (row["token_hash"],))
+            user = None if row is None else self._user_row("id", row["user_id"])
+        if row is None or now >= datetime.fromisoformat(row["expires_at"]) or user is None or user.disabled:
+            raise AccountError("invalid_link", INVALID_LINK)
+        return user
+
+    def _void_email_tokens(self, user_id: str, purpose: str) -> None:
+        """Called with the lock held."""
+        self._db.execute("DELETE FROM email_tokens WHERE user_id = ? AND purpose = ?", (user_id, purpose))
 
     # Settings ---------------------------------------------------------------------------
 

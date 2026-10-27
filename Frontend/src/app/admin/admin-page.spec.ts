@@ -64,6 +64,7 @@ const OVERVIEW: AdminOverview = {
   default_model: 'claude-opus-5',
   default_effort: 'high',
   google_enabled: false,
+  email_enabled: false,
   registration_open: true,
   people: { accounts: 3, admins: 1, disabled: 1 },
   conversations: { conversations: 12, questions: 4 },

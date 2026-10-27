@@ -1,11 +1,12 @@
-"""Setup check: Python version, settings, read-only database access, API key, and one live Claude call.
+"""Setup check: Python version, settings, read-only database access, API key, one live Claude call,
+and the mail server if email is set up.
 
 Run from the Backend folder:
     .venv/bin/python -m sql_agent.check_setup               # full check, makes one small API call
     .venv/bin/python -m sql_agent.check_setup --offline     # skip every API call
     .venv/bin/python -m sql_agent.check_setup --all-models  # one small call to every model offered
 
-The API key value is never printed, only whether it is set.
+The API key and the mail password are never printed, only whether they are set.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import anthropic
 
 from .config import ENV_FILE, ConfigError, Settings, load_settings
 from .llm import build_chat_model
+from .mailer import MailError, load_mailer
 from .models import CATALOG
 
 MIN_PYTHON = (3, 10)
@@ -145,6 +147,29 @@ def check_live_call(settings: Settings, model_id: str | None = None) -> bool:
     return False
 
 
+def check_email(*, offline: bool) -> bool:
+    """Sign in to the mail server without sending anything. Email being off is not a failure."""
+    try:
+        mailer = load_mailer()
+    except ConfigError as exc:
+        _report("FAIL", "Email", str(exc))
+        return False
+    if mailer is None:
+        _report("SKIP", "Email", "off; set SQL_AGENT_SMTP_* to send password reset links")
+        return True
+    where = f"{mailer.host}:{mailer.port} as {mailer.username}"
+    if offline:
+        _report("SKIP", "Email", f"{where}, not contacted with --offline")
+        return True
+    try:
+        mailer.check()
+    except MailError as exc:
+        _report("FAIL", "Email", f"{where}: {exc}")
+        return False
+    _report("PASS", "Email", f"signed in to {where}")
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check that the SQL agent backend is set up correctly.")
     parser.add_argument("--offline", action="store_true", help="skip every call to the Anthropic API")
@@ -178,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
             results.append(check_live_call(settings, model_id))
     else:
         _report("SKIP", "Claude call", "no API key")
+
+    results.append(check_email(offline=args.offline))
 
     all_ok = all(results)
     print("\nSetup OK." if all_ok else "\nSetup incomplete; fix the FAIL lines above.")

@@ -1,9 +1,12 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
 
 import { AgentApi, ApiError } from '../api/agent-api';
 import { Auth } from '../auth/auth';
 
-/** Your name, and the email and role you cannot change here. */
+/**
+ * Your name, and the email and role you cannot change here. An email not yet confirmed shows
+ * a reminder with a button to send the link again, when the service can send email.
+ */
 @Component({
   selector: 'app-profile-section',
   template: `
@@ -29,6 +32,32 @@ import { Auth } from '../auth/auth';
             <p class="settings-hint">
               Your email is how you sign in, so only an administrator can change it.
             </p>
+            @if (!user.email_verified && emailEnabled()) {
+              <div class="unverified">
+                <p>
+                  Your email is not confirmed yet. Confirming it lets you sign in with Google as
+                  this address.
+                </p>
+                <button
+                  type="button"
+                  class="secondary"
+                  [disabled]="sending()"
+                  (click)="sendConfirmation()"
+                >
+                  {{ sending() ? 'Sending…' : 'Send confirmation email' }}
+                </button>
+                @if (sendStatus(); as text) {
+                  <p
+                    class="settings-status"
+                    [class.ok]="!sendFailed()"
+                    [class.error]="sendFailed()"
+                    role="status"
+                  >
+                    {{ text }}
+                  </p>
+                }
+              </div>
+            }
           </div>
           <div class="settings-row">
             <span class="label">Role</span>
@@ -64,11 +93,30 @@ import { Auth } from '../auth/auth';
       background: var(--surface-2);
       color: var(--text-muted);
     }
+    .unverified {
+      display: grid;
+      justify-items: start;
+      gap: var(--space-2);
+      margin-top: var(--space-2);
+      padding: var(--space-3);
+      border-radius: var(--radius-md);
+      background: var(--warning-bg);
+      color: var(--warning-text);
+      font-size: var(--text-sm);
+    }
+    .unverified p {
+      margin: 0;
+    }
   `,
 })
-export class ProfileSection {
+export class ProfileSection implements OnInit {
   protected readonly auth = inject(Auth);
   private readonly api = inject(AgentApi);
+
+  protected readonly emailEnabled = computed(() => this.auth.config()?.email_enabled ?? false);
+  protected readonly sending = signal(false);
+  protected readonly sendStatus = signal<string | null>(null);
+  protected readonly sendFailed = signal(false);
 
   protected readonly name = signal(this.auth.user()?.name ?? '');
   protected readonly busy = signal(false);
@@ -77,6 +125,24 @@ export class ProfileSection {
   protected readonly changed = computed(
     () => this.name().trim() !== (this.auth.user()?.name ?? ''),
   );
+
+  ngOnInit(): void {
+    void this.auth.loadConfig();
+  }
+
+  protected async sendConfirmation(): Promise<void> {
+    this.sending.set(true);
+    try {
+      await this.api.sendVerification();
+      this.sendStatus.set(`Sent to ${this.auth.user()?.email}. The link works for 3 days.`);
+      this.sendFailed.set(false);
+    } catch (error) {
+      this.sendStatus.set(error instanceof ApiError ? error.message : 'It could not be sent.');
+      this.sendFailed.set(true);
+    } finally {
+      this.sending.set(false);
+    }
+  }
 
   protected async save(event: Event): Promise<void> {
     event.preventDefault();

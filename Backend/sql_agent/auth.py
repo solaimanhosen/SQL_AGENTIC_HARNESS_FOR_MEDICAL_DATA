@@ -36,7 +36,11 @@ class NotAllowed(Exception):
 
 
 class Throttled(Exception):
-    """Too many failed sign-ins recently."""
+    """Too many failed sign-ins, or too many emails asked for, recently."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
 
 def set_session_cookie(response, token: str, *, secure: bool) -> None:
@@ -108,11 +112,22 @@ class CsrfGuard:
 
 
 class SignInThrottle:
-    """Failed sign-ins per address and per email over a sliding window, kept in memory."""
+    """Failed sign-ins per address and per email over a sliding window, kept in memory.
 
-    def __init__(self, *, per_address: int = 20, per_email: int = 10, window_seconds: float = 600.0) -> None:
+    The same counting limits the emails anyone can make the service send.
+    """
+
+    def __init__(
+        self,
+        *,
+        per_address: int = 20,
+        per_email: int = 10,
+        window_seconds: float = 600.0,
+        message: str = "Too many failed sign-ins. Wait a few minutes and try again.",
+    ) -> None:
         self.limits = {"address": per_address, "email": per_email}
         self.window = window_seconds
+        self.message = message
         self._failures: dict[tuple[str, str], deque[float]] = {}
         self._lock = threading.Lock()
 
@@ -121,7 +136,7 @@ class SignInThrottle:
         with self._lock:
             for key in (("address", address), ("email", email.strip().lower())):
                 if len(self._recent(key, now)) >= self.limits[key[0]]:
-                    raise Throttled()
+                    raise Throttled(self.message)
 
     def failed(self, address: str, email: str) -> None:
         now = time.monotonic()

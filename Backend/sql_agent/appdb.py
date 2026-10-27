@@ -106,6 +106,18 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX check_runs_by_job ON check_runs(job, started_at);
     """,
+    # 6: links sent by email, to reset a password or confirm an address. Only the hash is kept,
+    # and a row is removed when its link is used or replaced.
+    """
+    CREATE TABLE email_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        purpose TEXT NOT NULL CHECK (purpose IN ('reset', 'verify')),
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    );
+    CREATE INDEX email_tokens_by_user ON email_tokens(user_id, purpose);
+    """,
 )
 SCHEMA_VERSION = 1 + len(MIGRATIONS)
 

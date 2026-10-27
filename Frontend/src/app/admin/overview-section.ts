@@ -52,7 +52,10 @@ const CHECK_LABELS: Record<string, string> = {
               Registration {{ data.registration_open ? 'open' : 'closed' }}
             </span>
           </p>
-          <p class="detail">Google sign-in {{ data.google_enabled ? 'on' : 'off' }}</p>
+          <p class="detail">
+            Google sign-in {{ data.google_enabled ? 'on' : 'off' }} · email
+            {{ data.email_enabled ? 'on' : 'off' }}
+          </p>
         </section>
         <section class="tile">
           <p class="name">Service</p>

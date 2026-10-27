@@ -33,7 +33,7 @@ def app(sample_db_path, tmp_path):
         layer=load_semantic_layer(),
         as_of=date(2026, 8, 16),
     )
-    return create_app(agent, google=None, throttle=SignInThrottle(per_address=5, per_email=3))
+    return create_app(agent, google=None, mailer=None, throttle=SignInThrottle(per_address=5, per_email=3))
 
 
 @pytest.fixture
@@ -161,7 +161,9 @@ def test_sessions_are_listed_and_others_can_be_signed_out(client):
 def test_with_secure_cookies_on_the_session_cookie_is_https_only():
     settings = dataclasses.replace(load_settings({}), conversations_path=None, request_log_path=None, secure_cookies=True)
     secure_app = create_app(
-        SimpleNamespace(settings=settings, db=None, layer=load_semantic_layer(), as_of=date(2026, 8, 16)), google=None
+        SimpleNamespace(settings=settings, db=None, layer=load_semantic_layer(), as_of=date(2026, 8, 16)),
+        google=None,
+        mailer=None,
     )
     response = _register(TestClient(secure_app, headers=CSRF))
     assert "secure" in response.headers["set-cookie"].lower()

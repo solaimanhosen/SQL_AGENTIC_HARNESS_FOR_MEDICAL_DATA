@@ -68,3 +68,40 @@ def test_a_missing_model_or_effort_or_thinking_mode_is_reported():
     assert "claude-sonnet-5-5 is not offered to this API key" in problems
     assert "claude-haiku-5-5 does not accept effort xhigh, max" in problems
     assert "claude-sonnet-5 does not accept adaptive thinking" in problems
+
+
+MAIL = {
+    "SQL_AGENT_SMTP_HOST": "smtp.example.org",
+    "SQL_AGENT_SMTP_USERNAME": "sender@example.org",
+    "SQL_AGENT_SMTP_PASSWORD": "app password",
+    "SQL_AGENT_MAIL_FROM": "sender@example.org",
+}
+
+
+def test_email_off_is_skipped_not_failed(capsys):
+    assert check_setup.check_email(offline=False) is True
+    assert "[SKIP] Email: off" in capsys.readouterr().out
+
+
+def test_the_mail_server_is_signed_in_to_and_the_password_never_printed(monkeypatch, capsys):
+    for key, value in MAIL.items():
+        monkeypatch.setenv(key, value)
+    checked = []
+    monkeypatch.setattr(check_setup.load_mailer().__class__, "check", lambda self: checked.append(self.host))
+    assert check_setup.check_email(offline=False) is True
+    out = capsys.readouterr().out
+    assert checked == ["smtp.example.org"] and "[PASS] Email: signed in to smtp.example.org:587" in out
+    assert "app password" not in out
+    assert check_setup.check_email(offline=True) is True and checked == ["smtp.example.org"]
+
+
+def test_a_refused_mail_sign_in_fails(monkeypatch, capsys):
+    for key, value in MAIL.items():
+        monkeypatch.setenv(key, value)
+
+    def refuse(self):
+        raise check_setup.MailError("SMTPAuthenticationError: (535, 'not accepted')")
+
+    monkeypatch.setattr(check_setup.load_mailer().__class__, "check", refuse)
+    assert check_setup.check_email(offline=False) is False
+    assert "[FAIL] Email" in capsys.readouterr().out

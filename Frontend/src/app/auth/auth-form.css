@@ -1,0 +1,78 @@
+/* What the signed-out pages put inside app-auth-shell's card. */
+h1 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-xl);
+}
+.lead {
+  margin: 0 0 var(--space-6);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.alert {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--danger-bg);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+.done {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--ok-text) 25%, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--ok-bg);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+form {
+  display: grid;
+  gap: var(--space-1-5);
+}
+label {
+  margin-top: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+.label-row label {
+  margin-top: 0;
+}
+.label-row a {
+  color: var(--accent);
+  font-size: var(--text-sm);
+}
+.optional,
+.hint {
+  color: var(--text-subtle);
+  font-weight: 400;
+}
+.hint {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+.submit {
+  min-height: 2.5rem;
+  margin-top: var(--space-4);
+}
+.switch {
+  margin: var(--space-5) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+.switch a {
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+h1 + .done,
+h1 + .alert {
+  margin-top: var(--space-4);
+}

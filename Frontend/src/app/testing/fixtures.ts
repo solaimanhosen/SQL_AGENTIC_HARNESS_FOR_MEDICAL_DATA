@@ -127,6 +127,7 @@ export function userFixture(overrides: Partial<AuthUser> = {}): AuthUser {
     role: 'user',
     has_password: true,
     google_linked: false,
+    email_verified: true,
     default_model: null,
     default_effort: null,
     ...overrides,

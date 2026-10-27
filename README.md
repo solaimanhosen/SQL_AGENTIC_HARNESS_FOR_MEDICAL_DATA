@@ -39,7 +39,7 @@ an earlier one can be reopened from the sidebar, searched, pinned and continued.
 can be stopped while it is being answered.
 
 People sign in with an account, by password or with Google, and see only their own
-conversations. In the question box they choose the model (Opus 5, Opus 5.5, Sonnet 5.5,
+conversations. A forgotten password is reset through a link sent by email. In the question box they choose the model (Opus 5, Opus 5.5, Sonnet 5.5,
 Sonnet 5 or Haiku 5.5) and how hard it thinks. Admins also get a console that runs the
 project's checks from the browser, shows usage and cost, and manages accounts.
 
@@ -117,7 +117,7 @@ risks in [`Documents/security.md`](Documents/security.md) before pointing it at 
 - [Evaluation](Documents/evaluation.md): how answers are scored, and the latest results
 - [Security review](Documents/security.md): threats, controls, evidence and residual risks
 - [Analytics, charts and reports](Documents/analytics-and-reports.md): the design and results of v3.0.0
-- [Decision records](Documents/decisions/): why LangChain and Claude, how time windows are anchored, where conversations are stored, and how analytics are computed
+- [Decision records](Documents/decisions/): why LangChain and Claude, how time windows are anchored, where conversations are stored, how analytics are computed, the model catalog, accounts, Google sign-in, the admin console, and links sent by email
 
 ## License
 

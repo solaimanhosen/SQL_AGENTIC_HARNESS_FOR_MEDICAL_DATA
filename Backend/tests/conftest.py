@@ -5,6 +5,25 @@ import pytest
 from sql_agent import passwords
 
 
+# Secrets from Backend/.env that would reach a real service. They are set empty, not removed,
+# because loading .env never replaces a variable that is already set.
+REAL_SERVICE_SETTINGS = (
+    "SQL_AGENT_GOOGLE_CLIENT_ID",
+    "SQL_AGENT_GOOGLE_CLIENT_SECRET",
+    "SQL_AGENT_SMTP_HOST",
+    "SQL_AGENT_SMTP_USERNAME",
+    "SQL_AGENT_SMTP_PASSWORD",
+    "SQL_AGENT_MAIL_FROM",
+)
+
+
+@pytest.fixture(autouse=True)
+def no_real_google_or_mail(monkeypatch):
+    """No test signs in to Google or sends an email, whatever Backend/.env holds."""
+    for name in REAL_SERVICE_SETTINGS:
+        monkeypatch.setenv(name, "")
+
+
 @pytest.fixture(autouse=True)
 def quick_password_hashing(monkeypatch):
     """Real scrypt, at a cost small enough that tests that sign in stay fast."""

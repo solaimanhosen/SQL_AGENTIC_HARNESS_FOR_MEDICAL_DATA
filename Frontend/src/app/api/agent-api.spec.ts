@@ -135,6 +135,37 @@ describe('AgentApi', () => {
     ]);
   });
 
+  it('asks for links, resets and confirms, without treating a refusal as signing out', async () => {
+    const { api, fetchSpy } = setup(async (url) =>
+      url.endsWith('/forgot') || url.endsWith('/verify-email')
+        ? jsonResponse({ accepted: true }, 202)
+        : new Response(null, { status: 204 }),
+    );
+    await api.forgotPassword('ann@example.org');
+    await api.resetPassword('a-token', 'a new password');
+    await api.verifyEmail('a-token');
+    await api.sendVerification();
+    const calls = fetchSpy.mock.calls.map(([url, init]) => [init.method, url, init.body]);
+    expect(calls).toEqual([
+      ['POST', '/api/auth/forgot', JSON.stringify({ email: 'ann@example.org' })],
+      ['POST', '/api/auth/reset', JSON.stringify({ token: 'a-token', password: 'a new password' })],
+      ['POST', '/api/auth/verify', JSON.stringify({ token: 'a-token' })],
+      ['POST', '/api/account/verify-email', undefined],
+    ]);
+    for (const [, init] of fetchSpy.mock.calls) {
+      expect(new Headers(init.headers).get('X-Requested-With')).toBe('sql-agent');
+    }
+
+    TestBed.resetTestingModule();
+    const refused = setup(async () =>
+      jsonResponse({ error: 'invalid_link', message: 'This link has expired.' }, 401),
+    );
+    await expect(refused.api.resetPassword('old', 'a new password')).rejects.toMatchObject({
+      message: 'This link has expired.',
+    });
+    expect(refused.api.signedOut()).toBe(0);
+  });
+
   it('turns an error event in the stream into an ApiError', async () => {
     const { api } = setup(async () =>
       streamResponse([

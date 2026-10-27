@@ -21,6 +21,7 @@ import uvicorn
 from .config import ConfigError, load_settings
 from .conversations import NewerSchema
 from .google_login import load_google_config
+from .mailer import load_mailer
 from .service import create_app
 
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -49,13 +50,23 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     google = load_google_config(settings.public_url) is not None
+    try:
+        mailer = load_mailer()
+    except ConfigError as exc:
+        print(f"Settings error: {exc}", file=sys.stderr)
+        return 1
     print(
         f"Accounts: registration {'open' if settings.registration_open else 'closed'} by default, "
         f"Google sign-in {'on' if google else 'off'}, cookies {'HTTPS only' if settings.secure_cookies else 'plain HTTP allowed'}.",
         file=sys.stderr,
     )
+    print(
+        f"Email {'on, through ' + mailer.host + ':' + str(mailer.port) if mailer else 'off'}: "
+        f"password reset links {'are' if mailer else 'are not'} sent.",
+        file=sys.stderr,
+    )
     try:
-        app = create_app()
+        app = create_app(mailer=mailer)
     except NewerSchema as exc:
         print(f"Conversations file error: {exc}", file=sys.stderr)
         return 1
